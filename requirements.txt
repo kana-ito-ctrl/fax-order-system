@@ -1,0 +1,5 @@
+streamlit>=1.30.0
+anthropic>=0.40.0
+reportlab>=4.0
+PyMuPDF>=1.24.0
+pandas>=2.0

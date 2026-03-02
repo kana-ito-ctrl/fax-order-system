@@ -1,0 +1,23 @@
+{
+  "staff": [
+    {
+      "name": "伊藤",
+      "full_name": "伊藤 香那",
+      "phone": "070-7487-7210",
+      "email": "kana-ito@two2.jp"
+    },
+    {
+      "name": "野本",
+      "full_name": "野本 達郎",
+      "phone": "070-8806-9864",
+      "email": "tatsuro-nomoto@two2.jp"
+    }
+  ],
+  "company": {
+    "name": "株式会社ＴＷＯ",
+    "postal": "150-0012",
+    "address": "東京都品川区西五反田2-24-4 THE CROSS GOTANDA 5階",
+    "tel": "03-6839-0010",
+    "fax": "03-4496-4769"
+  }
+}
