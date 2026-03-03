@@ -85,7 +85,7 @@ with tab_auto:
                                 st.success("読み取り完了！")
 
                         # STEP 3: 確認・マッチング
-                        ocr_key = f"ocr_{file.name}_{page_info['page']}"
+                        ocr_key = f"data_ocr_{file.name}_{page_info['page']}"
                         if ocr_key in st.session_state:
                             ocr_result = st.session_state[ocr_key]
                             st.markdown("---")
