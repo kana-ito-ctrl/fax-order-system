@@ -195,14 +195,45 @@ with tab_auto:
                             ocr_items = ocr_result.get("items", [])
                             matched_items = match_products(ocr_items, pm)
 
+                            # ============================================================
+                            # 商品一覧（数量編集可能）
+                            # ============================================================
                             st.markdown("**商品一覧：**")
+                            st.caption("💡 OCR読取の数量が正しくない場合は、CS数欄で修正してください。")
+
                             for idx, item in enumerate(matched_items):
                                 if item["matched"]:
                                     dest = item["output_dest"]
                                     color = "🔵" if dest == "ハルナ" else "🟤"
-                                    st.write(f"{color} {item['master_name']} | {item['quantity']}CS | "
-                                             f"CS単価 ¥{item['cs_price']:,.0f} | "
-                                             f"金額 ¥{item['amount']:,.0f} | → **{dest}**")
+
+                                    # 4カラム: 商品情報 | CS単価 | 数量入力 | 金額・出力先
+                                    col_info, col_price, col_qty_input, col_amt = st.columns([4, 1, 1, 2])
+
+                                    col_info.markdown(f"{color} **{item['master_name']}**")
+                                    col_price.markdown(f"CS単価  \n¥{item['cs_price']:,.0f}")
+
+                                    # 数量入力欄（OCR値をデフォルト、ユーザーが修正可能）
+                                    ocr_qty = int(item.get("quantity", 0))
+                                    edited_qty = col_qty_input.number_input(
+                                        "CS数",
+                                        min_value=0,
+                                        value=ocr_qty,
+                                        step=1,
+                                        key=f"qty_{ocr_key}_{idx}",
+                                    )
+
+                                    # 編集後の数量と金額をitemに反映
+                                    item["quantity"] = edited_qty
+                                    item["amount"] = edited_qty * float(item["cs_price"])
+
+                                    col_amt.markdown(
+                                        f"金額 ¥{item['amount']:,.0f}  \n→ **{dest}**"
+                                    )
+
+                                    # 数量が変更された場合にOCR元値を表示
+                                    if edited_qty != ocr_qty:
+                                        col_qty_input.caption(f"(OCR: {ocr_qty})")
+
                                 else:
                                     st.error(f"❌ 未マッチ：{item['ocr_name']}（JAN: {item.get('jan', '不明')}）")
 
@@ -404,5 +435,5 @@ with st.sidebar:
     st.caption(f"DDCマスタ：{len(ddc)}件")
     st.caption(f"担当者：{', '.join(staff_names)}")
     st.markdown("---")
-    st.caption("Version 1.1 - 納品先ファジーマッチング対応")
+    st.caption("Version 1.2 - 数量手動修正対応")
     st.caption("株式会社TWO 事業管理部")
