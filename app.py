@@ -80,7 +80,8 @@ with tab_auto:
                             if "error" in ocr_result:
                                 st.error(ocr_result["error"])
                             else:
-                                st.session_state[f"ocr_{file.name}_{page_info['page']}"] = ocr_result
+                                data_key = f"data_ocr_{file.name}_{page_info['page']}"
+                                st.session_state[data_key] = ocr_result
                                 st.success("読み取り完了！")
 
                         # STEP 3: 確認・マッチング
