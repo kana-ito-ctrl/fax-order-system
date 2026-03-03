@@ -49,15 +49,28 @@ def load_ddc_master():
     return pd.read_csv(os.path.join(DATA_DIR, "ddc_master.csv"))
 
 # ========== Utility Functions ==========
+
+def safe_str(val):
+    """値を安全な文字列に変換。nan/None/NaN -> 空文字"""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if s.lower() in ("nan", "none", "null"):
+        return ""
+    return s
+
+
 def tw(text, fs):
     from reportlab.pdfbase.pdfmetrics import stringWidth
     return stringWidth(str(text), FONT, fs)
 
+
 def draw_clipped(c, text, x, y, max_w, fs, lh=None):
-    """セル内にテキスト描画。収まらない場合: 縮小→改行"""
+    """セル内にテキスト描画。収まらない場合: 縮小->改行"""
+    text = safe_str(text)
     if not text:
         return 1
-    text = str(text).replace('\n', ' ')
+    text = text.replace('\n', ' ')
     if lh is None:
         lh = fs + 3
     if tw(text, fs) <= max_w:
@@ -87,8 +100,47 @@ def draw_clipped(c, text, x, y, max_w, fs, lh=None):
         c.drawString(x, y - i * lh, ln)
     return min(len(lines), 3)
 
+
+def draw_header_text(c, text, x, y, max_w, fs):
+    """ヘッダー用テキスト描画。長い文字列はフォント自動縮小 -> 折り返し。
+    戻り値: 追加で下がったピクセル数（折り返しがなければ0）"""
+    text = safe_str(text)
+    if not text:
+        return 0
+    text = text.replace('\n', ' ')
+    # まず指定サイズで収まるか
+    if tw(text, fs) <= max_w:
+        c.setFont(FONT, fs)
+        c.drawString(x, y, text)
+        return 0
+    # 段階的にフォントサイズを下げる（最小6pt）
+    for nfs in range(fs - 1, 5, -1):
+        if tw(text, nfs) <= max_w:
+            c.setFont(FONT, nfs)
+            c.drawString(x, y, text)
+            return 0
+    # それでも収まらない場合は折り返し（最大2行）
+    nfs = max(fs - 2, 6)
+    c.setFont(FONT, nfs)
+    line_h = nfs + 2
+    lines, cur = [], ""
+    for ch in text:
+        if tw(cur + ch, nfs) > max_w:
+            lines.append(cur)
+            cur = ch
+        else:
+            cur += ch
+    if cur:
+        lines.append(cur)
+    for i, ln in enumerate(lines[:2]):
+        c.drawString(x, y - i * line_h, ln)
+    extra_lines = min(len(lines), 2) - 1
+    return extra_lines * line_h
+
+
 def cell_mid_y(row_top, row_h, font_size):
     return row_top - (row_h / 2) - (font_size * 0.3)
+
 
 def draw_table_row(c, ml, row_top, col_defs, uw, row_h, fill_color=None):
     row_y = row_top - row_h
@@ -108,7 +160,7 @@ def draw_table_row(c, ml, row_top, col_defs, uw, row_h, fill_color=None):
 
 # ========== シルビア v12 ==========
 def gen_sylvia_pdf(order, items, staff_name="伊藤"):
-    """シルビア向け発注書PDF生成。BytesIOを返す"""
+    """シルビア向け発注書PDF生成。BytesIOを返す。パレット条件行なし。"""
     buf = BytesIO()
     staff_data = load_staff()
     company = staff_data["company"]
@@ -136,16 +188,20 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
     c.drawString(ml, y, "（株）シルビア 本社")
     rx = w - mr - 75*mm
     c.setFont(FONT, 11)
-    c.drawString(rx, y, f"日付　{order['order_date']}")
+    c.drawString(rx, y, "日付　%s" % safe_str(order.get('order_date', '')))
     y -= 16
     c.setFont(FONT, 11)
     c.drawString(ml, y, "ご担当者様")
-    c.setFont(FONT, 10)
-    c.drawString(rx, y, f"〒{company['postal']} {company['address']}")
-    y -= 14
+
+    # TWO住所（長文対応: 自動縮小/折り返し）
+    addr_text = "\u3012%s %s" % (safe_str(company.get('postal', '')), safe_str(company.get('address', '')))
+    addr_max_w = 75*mm
+    extra_drop = draw_header_text(c, addr_text, rx, y, addr_max_w, 10)
+    y -= (14 + extra_drop)
+
     c.setFont(FONT, 10)
     c.drawString(ml, y, "FAX：0587-95-5120　　TEL：0587-95-2725")
-    c.drawString(rx, y, f"{company['name']}　担当：{staff['name']}")
+    c.drawString(rx, y, "%s　担当：%s" % (safe_str(company.get('name', '')), safe_str(staff.get('name', ''))))
     y -= 20
 
     # タイトル
@@ -161,18 +217,18 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
     total = subtotal + tax
 
     c.setFont(FONT, 12)
-    c.drawString(ml, y, f"オーダーNO：")
+    c.drawString(ml, y, "オーダーNO：")
     c.setFont(FONT, 13)
-    c.drawString(ml + 35*mm, y, order.get('order_no', ''))
+    c.drawString(ml + 35*mm, y, safe_str(order.get('order_no', '')))
     c.setFont(FONT, 12)
-    c.drawString(ml + 80*mm, y, f"納品日：")
+    c.drawString(ml + 80*mm, y, "納品日：")
     c.setFont(FONT, 13)
-    c.drawString(ml + 100*mm, y, order['delivery_date'])
+    c.drawString(ml + 100*mm, y, safe_str(order.get('delivery_date', '')))
     c.setFont(FONT, 13)
-    c.drawString(w - mr - 75*mm, y, f"発注額：¥{total:,}（税込）")
+    c.drawString(w - mr - 75*mm, y, "発注額：\xa5%s（税込）" % "{:,}".format(total))
     y -= 24
 
-    # 納品先テーブル
+    # 納品先テーブル（パレット条件行なし）
     dest_cols = [(0, 40), (40, 22), (62, 78), (140, 28), (168, 30)]
     dest_labels = ["納品先", "郵便番号", "住所", "電話番号", "FAX番号"]
     hdr_h = 20
@@ -192,7 +248,7 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
     ty = cell_mid_y(y, row_h, 10)
     draw_clipped(c, order.get('delivery_dest', ''), ml + pad, ty, 39*mm, 10, 12)
     draw_clipped(c, order.get('postal', ''), ml + 40*mm + pad, ty, 21*mm, 10, 12)
-    draw_clipped(c, order.get('address', '').replace('\n', ' '), ml + 62*mm + pad, ty, 77*mm, 10, 12)
+    draw_clipped(c, safe_str(order.get('address', '')).replace('\n', ' '), ml + 62*mm + pad, ty, 77*mm, 10, 12)
     draw_clipped(c, order.get('tel', ''), ml + 140*mm + pad, ty, 27*mm, 10, 12)
     draw_clipped(c, order.get('fax', ''), ml + 168*mm + pad, ty, 29*mm, 10, 12)
     y -= row_h + 8
@@ -230,14 +286,22 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
         draw_clipped(c, item.get('pack', ''), ml + prod_cols[3][0]*mm + pad, ty, 15*mm, 9)
 
         c.setFont(FONT, 11)
-        c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1])*mm - pad, ty, str(item.get('unit_price', '')))
-        c.drawRightString(ml + (prod_cols[5][0] + prod_cols[5][1])*mm - pad, ty, f"{item.get('cs_price', ''):,}")
+        c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1])*mm - pad, ty, safe_str(item.get('unit_price', '')))
+        cs_price = item.get('cs_price', '')
+        if cs_price != '' and cs_price is not None:
+            try:
+                c.drawRightString(ml + (prod_cols[5][0] + prod_cols[5][1])*mm - pad, ty, "{:,}".format(int(cs_price)))
+            except (ValueError, TypeError):
+                c.drawRightString(ml + (prod_cols[5][0] + prod_cols[5][1])*mm - pad, ty, safe_str(cs_price))
         c.setFont(FONT, 12)
-        c.drawRightString(ml + (prod_cols[6][0] + prod_cols[6][1])*mm - pad, ty, str(item.get('quantity', '')))
+        c.drawRightString(ml + (prod_cols[6][0] + prod_cols[6][1])*mm - pad, ty, safe_str(item.get('quantity', '')))
         amt = item.get('amount', '')
-        if amt:
-            c.setFont(FONT, 11)
-            c.drawRightString(ml + (prod_cols[7][0] + prod_cols[7][1])*mm - pad, ty, f"{amt:,}")
+        if amt and amt is not None:
+            try:
+                c.setFont(FONT, 11)
+                c.drawRightString(ml + (prod_cols[7][0] + prod_cols[7][1])*mm - pad, ty, "{:,}".format(int(amt)))
+            except (ValueError, TypeError):
+                pass
         y -= prod_row_h
 
     for _ in range(max(0, 4 - len(items))):
@@ -248,15 +312,15 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
     tx = ml + 155*mm
     c.setFont(FONT, 12)
     c.drawString(tx, y, "小計")
-    c.drawRightString(w - mr - 5*mm, y, f"¥{subtotal:,}")
+    c.drawRightString(w - mr - 5*mm, y, "\xa5%s" % "{:,}".format(subtotal))
     y -= 18
     c.drawString(tx, y, "消費税(8%)")
-    c.drawRightString(w - mr - 5*mm, y, f"¥{tax:,}")
+    c.drawRightString(w - mr - 5*mm, y, "\xa5%s" % "{:,}".format(tax))
     y -= 18
     c.setFont(FONT, 14)
     c.setFillColor(SYL_PRIMARY)
     c.drawString(tx, y, "合計")
-    c.drawRightString(w - mr - 5*mm, y, f"¥{total:,}")
+    c.drawRightString(w - mr - 5*mm, y, "\xa5%s" % "{:,}".format(total))
 
     c.showPage()
     c.save()
@@ -266,7 +330,7 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
 
 # ========== ハルナ 最終版 ==========
 def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
-    """ハルナ向け発注書PDF生成。BytesIOを返す"""
+    """ハルナ向け発注書PDF生成。BytesIOを返す。パレット条件行はハルナのみ表示。"""
     buf = BytesIO()
     staff_data = load_staff()
     company = staff_data["company"]
@@ -294,19 +358,23 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     c.drawString(ml, y, "ハルナプロデュース㈱")
     rx = w - mr - 80*mm
     c.setFont(FONT, 11)
-    c.drawString(rx, y, f"日付　{order['order_date']}")
+    c.drawString(rx, y, "日付　%s" % safe_str(order.get('order_date', '')))
     y -= 15
     c.setFont(FONT, 11)
     c.drawString(ml, y, "受注ご担当者様")
+
+    # TWO住所（長文対応: 自動縮小/折り返し）
+    addr_text = "\u3012%s %s" % (safe_str(company.get('postal', '')), safe_str(company.get('address', '')))
+    addr_max_w = 80*mm
+    extra_drop = draw_header_text(c, addr_text, rx, y, addr_max_w, 10)
+    y -= (14 + extra_drop)
+
     c.setFont(FONT, 10)
-    c.drawString(rx, y, f"〒{company['postal']} {company['address']}")
+    c.drawString(rx, y, safe_str(company.get('name', '')))
     y -= 14
-    c.setFont(FONT, 10)
-    c.drawString(rx, y, company['name'])
+    c.drawString(rx, y, "FAX：%s　TEL：%s" % (safe_str(company.get('fax', '')), safe_str(company.get('tel', ''))))
     y -= 14
-    c.drawString(rx, y, f"FAX：{company['fax']}　TEL：{company['tel']}")
-    y -= 14
-    c.drawString(rx, y, f"担当：{staff['name']}（携帯：{staff['phone']}）")
+    c.drawString(rx, y, "担当：%s（携帯：%s）" % (safe_str(staff.get('name', '')), safe_str(staff.get('phone', ''))))
     y -= 18
 
     # タイトル
@@ -322,15 +390,15 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     c.setFont(FONT, 12)
     c.drawString(ml, y, "オーダーNO：")
     c.setFont(FONT, 13)
-    c.drawString(ml + 35*mm, y, order.get('order_no', ''))
+    c.drawString(ml + 35*mm, y, safe_str(order.get('order_no', '')))
     c.setFont(FONT, 12)
     c.drawString(ml + 85*mm, y, "納品日：")
     c.setFont(FONT, 13)
-    c.drawString(ml + 105*mm, y, order['delivery_date'])
-    remarks = order.get('remarks', '')
+    c.drawString(ml + 105*mm, y, safe_str(order.get('delivery_date', '')))
+    remarks = safe_str(order.get('remarks', ''))
     if remarks:
         c.setFont(FONT, 11)
-        c.drawString(w - mr - 70*mm, y, f"備考：{remarks}")
+        c.drawString(w - mr - 70*mm, y, "備考：%s" % remarks)
     y -= 24
 
     # 納品先テーブル
@@ -353,13 +421,13 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     ty = cell_mid_y(y, row_h, 10)
     draw_clipped(c, order.get('delivery_dest', ''), ml + pad, ty, 41*mm, 10, 12)
     draw_clipped(c, ddc.get('postal', ''), ml + 42*mm + pad, ty, 21*mm, 10)
-    draw_clipped(c, ddc.get('address', '').replace('\n', ' '), ml + 64*mm + pad, ty, 71*mm, 10, 12)
+    draw_clipped(c, safe_str(ddc.get('address', '')).replace('\n', ' '), ml + 64*mm + pad, ty, 71*mm, 10, 12)
     draw_clipped(c, ddc.get('tel', ''), ml + 136*mm + pad, ty, 23*mm, 10)
     draw_clipped(c, ddc.get('fax', ''), ml + 160*mm + pad, ty, 21*mm, 10)
     draw_clipped(c, ddc.get('time', ''), ml + 182*mm + pad, ty, 15*mm, 9)
     y -= row_h + 4
 
-    # パレット条件テーブル
+    # パレット条件テーブル（ハルナのみ表示）
     info_cols = [(0, 50), (50, 60), (110, 88)]
     info_hdr = ["バース予約", "パレット条件", "備考"]
     info_h = 22
@@ -375,12 +443,12 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
 
     draw_table_row(c, ml, y, info_cols, uw, info_h)
     ty = cell_mid_y(y, info_h, 10)
-    draw_clipped(c, ddc.get('berse', '無'), ml + pad, ty, 49*mm, 10)
-    draw_clipped(c, ddc.get('palette', ''), ml + 50*mm + pad, ty, 59*mm, 10)
-    jpr = ddc.get('jpr', '')
-    method = ddc.get('method', '')
+    draw_clipped(c, safe_str(ddc.get('berse', '無')), ml + pad, ty, 49*mm, 10)
+    draw_clipped(c, safe_str(ddc.get('palette', '')), ml + 50*mm + pad, ty, 59*mm, 10)
+    jpr = safe_str(ddc.get('jpr', ''))
+    method = safe_str(ddc.get('method', ''))
     if jpr:
-        draw_clipped(c, f"JPRコード：{jpr}", ml + 110*mm + pad, ty, 87*mm, 10)
+        draw_clipped(c, "JPRコード：%s" % jpr, ml + 110*mm + pad, ty, 87*mm, 10)
     elif method:
         draw_clipped(c, method, ml + 110*mm + pad, ty, 87*mm, 10)
     y -= info_h + 6
@@ -410,11 +478,11 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     draw_table_row(c, ml, y, prod_cols, uw, prod_row_h, fill_color=bg)
     ty = cell_mid_y(y, prod_row_h, 11)
     draw_clipped(c, "2Water Ceramide", ml + prod_cols[0][0]*mm + pad, ty, 89*mm, 12)
-    draw_clipped(c, "500ml×24本", ml + prod_cols[1][0]*mm + pad, ty, 29*mm, 10)
+    draw_clipped(c, "500ml\xd724本", ml + prod_cols[1][0]*mm + pad, ty, 29*mm, 10)
     draw_clipped(c, "24本/cs", ml + prod_cols[2][0]*mm + pad, ty, 25*mm, 10)
     c.setFont(FONT, 13)
     c.drawRightString(ml + (prod_cols[3][0] + prod_cols[3][1])*mm - pad, ty, str(qty))
-    c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1])*mm - pad, ty, f"{bara:,}")
+    c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1])*mm - pad, ty, "{:,}".format(bara))
     y -= prod_row_h
 
     for _ in range(3):
@@ -425,7 +493,7 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     c.setFont(FONT, 12)
     c.drawRightString(ml + 172*mm - pad, y, "小　　計")
     c.setFont(FONT, 13)
-    c.drawRightString(ml + 198*mm - pad, y, f"{bara:,} 本")
+    c.drawRightString(ml + 198*mm - pad, y, "{:,} 本".format(bara))
 
     c.showPage()
     c.save()
