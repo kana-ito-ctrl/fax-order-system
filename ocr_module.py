@@ -7,7 +7,7 @@ import streamlit as st
 
 
 def get_api_key():
-    """APIキーを取得（Streamlit Secrets → 環境変数の順）"""
+    """APIキーを取得（Streamlit Secrets -> 環境変数の順）"""
     try:
         return st.secrets["ANTHROPIC_API_KEY"]
     except:
@@ -39,39 +39,39 @@ def ocr_fax_page(image_b64):
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    prompt = """このFAX発注書の画像を読み取り、以下のJSON形式で情報を抽出してください。
-
-{
-  "order_no": "オーダーNO/発注NO",
-  "order_date": "発注日 (YYYY-MM-DD)",
-  "delivery_date": "納品日/入荷日 (YYYY-MM-DD)",
-  "sender": "発注者/発注元の会社名",
-  "sender_contact": "担当者名",
-  "sender_fax": "発注元FAX番号",
-  "delivery_dest": "納品先/入荷場所の名称",
-  "delivery_address": "納品先住所",
-  "delivery_tel": "納品先電話番号",
-  "delivery_fax": "納品先FAX番号",
-  "items": [
-    {
-      "product_name": "商品名",
-      "jan_code": "JANコード（4589570で始まる13桁）",
-      "product_code": "商品コード",
-      "quantity_cs": "ケース数（数値）",
-      "quantity_bara": "バラ数/入数（数値）",
-      "unit_price": "単価（数値、あれば）",
-      "amount": "金額（数値、あれば）",
-      "best_before": "賞味期限条件（あれば）"
-    }
-  ],
-  "notes": "備考・特記事項"
-}
-
-注意事項：
-- JANコードは4589570801で始まる13桁の数字です。必ず正確に読み取ってください。
-- 数量はケース(CS)単位の数値で返してください。
-- 金額や単価がない場合は空文字にしてください。
-- JSONのみを返してください。説明文は不要です。"""
+    prompt = (
+        "このFAX発注書の画像を読み取り、以下のJSON形式で情報を抽出してください。\n\n"
+        "{\n"
+        '  "order_no": "オーダーNO/発注NO",\n'
+        '  "order_date": "発注日 (YYYY-MM-DD)",\n'
+        '  "delivery_date": "納品日/入荷日 (YYYY-MM-DD)",\n'
+        '  "sender": "発注者/発注元の会社名",\n'
+        '  "sender_contact": "担当者名",\n'
+        '  "sender_fax": "発注元FAX番号",\n'
+        '  "delivery_dest": "納品先/入荷場所の名称",\n'
+        '  "delivery_address": "納品先住所",\n'
+        '  "delivery_tel": "納品先電話番号",\n'
+        '  "delivery_fax": "納品先FAX番号",\n'
+        '  "items": [\n'
+        "    {\n"
+        '      "product_name": "商品名",\n'
+        '      "jan_code": "JANコード（4589570で始まる13桁）",\n'
+        '      "product_code": "商品コード",\n'
+        '      "quantity_cs": "ケース数（数値）",\n'
+        '      "quantity_bara": "バラ数/入数（数値）",\n'
+        '      "unit_price": "単価（数値、あれば）",\n'
+        '      "amount": "金額（数値、あれば）",\n'
+        '      "best_before": "賞味期限条件（あれば）"\n'
+        "    }\n"
+        "  ],\n"
+        '  "notes": "備考・特記事項"\n'
+        "}\n\n"
+        "注意事項：\n"
+        "- JANコードは4589570801で始まる13桁の数字です。必ず正確に読み取ってください。\n"
+        "- 数量はケース(CS)単位の数値で返してください。\n"
+        "- 金額や単価がない場合は空文字にしてください。\n"
+        "- JSONのみを返してください。説明文は不要です。"
+    )
 
     try:
         response = client.messages.create(
@@ -105,7 +105,7 @@ def ocr_fax_page(image_b64):
     except json.JSONDecodeError:
         return {"error": "OCR結果のJSON解析に失敗しました", "raw": text}
     except Exception as e:
-        return {"error": f"OCRエラー: {str(e)}"}
+        return {"error": "OCRエラー: {}".format(str(e))}
 
 
 def match_products(ocr_items, product_master):
@@ -159,7 +159,7 @@ def match_products(ocr_items, product_master):
 
 
 def match_ddc(dest_name, ddc_master):
-    """納品先名をDDCマスタとマッチング"""
+    """納品先名をDDCマスタとマッチング（従来互換）"""
     from difflib import SequenceMatcher
 
     best_ratio = 0
@@ -186,6 +186,88 @@ def match_ddc(dest_name, ddc_master):
         }
     else:
         return {"matched": False, "name": dest_name}
+
+
+def match_ddc_candidates(dest_name, ddc_master, max_candidates=5):
+    """
+    納品先名をDDCマスタとマッチング（候補付き）
+
+    完全一致 -> 自動マッチ
+    部分一致・類似度 -> 候補リスト返却（最大max_candidates件）
+    該当なし -> 空リスト
+
+    Returns:
+        dict:
+            exact_match (bool): 完全一致があったか
+            matched_row (dict|None): 完全一致のデータ
+            candidates (list[dict]): 候補リスト（類似度順）
+              各要素: {"name": str, "score": float, "row_data": dict}
+    """
+    from difflib import SequenceMatcher
+
+    dest_name_clean = dest_name.strip()
+    if not dest_name_clean:
+        return {"exact_match": False, "matched_row": None, "candidates": []}
+
+    # --- 1. 完全一致チェック ---
+    exact = ddc_master[ddc_master["納品先名"] == dest_name_clean]
+    if len(exact) > 0:
+        row = exact.iloc[0]
+        return {
+            "exact_match": True,
+            "matched_row": _row_to_dict(row),
+            "candidates": [],
+        }
+
+    # --- 2. 部分一致 + 類似度でスコアリング ---
+    scored = []
+    for _, row in ddc_master.iterrows():
+        master_name = str(row["納品先名"])
+        score = 0.0
+
+        # 部分一致ボーナス（どちらかが含まれている場合）
+        # 例：「福岡物流センター」が「山星屋福岡物流センター」に含まれる -> 0.85
+        if dest_name_clean in master_name or master_name in dest_name_clean:
+            score = 0.85
+
+        # SequenceMatcherの類似度
+        seq_ratio = SequenceMatcher(None, dest_name_clean, master_name).ratio()
+
+        # 最終スコア = 部分一致とSequenceMatcherの大きい方
+        final_score = max(score, seq_ratio)
+
+        if final_score >= 0.3:  # 最低閾値
+            scored.append({
+                "name": master_name,
+                "score": final_score,
+                "row_data": _row_to_dict(row),
+            })
+
+    # スコア降順でソート -> 上位N件
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    candidates = scored[:max_candidates]
+
+    return {
+        "exact_match": False,
+        "matched_row": None,
+        "candidates": candidates,
+    }
+
+
+def _row_to_dict(row):
+    """DDCマスタの1行をdictに変換"""
+    return {
+        "name": str(row.get("納品先名", "")),
+        "postal": str(row.get("郵便番号", "")),
+        "address": str(row.get("住所", "")),
+        "tel": str(row.get("電話番号", "")),
+        "fax": str(row.get("FAX番号", "")),
+        "time": str(row.get("入荷時間", "")),
+        "berse": str(row.get("バース予約", "無")),
+        "palette": str(row.get("パレット条件", "")),
+        "jpr": str(row.get("JPRコード", "")),
+        "method": str(row.get("納品方法", "")),
+    }
 
 
 import pandas as pd  # needed for match_products

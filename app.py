@@ -5,7 +5,7 @@ import json
 import os
 from io import BytesIO
 from pdf_generator import gen_sylvia_pdf, gen_haruna_pdf, load_product_master, load_ddc_master, load_staff
-from ocr_module import pdf_to_images, ocr_fax_page, match_products, match_ddc
+from ocr_module import pdf_to_images, ocr_fax_page, match_products, match_ddc, match_ddc_candidates
 
 # ========== Page Config ==========
 st.set_page_config(
@@ -99,13 +99,97 @@ with tab_auto:
 
                             dest_name = st.text_input("納品先", ocr_result.get("delivery_dest", ""), key=f"dn_{ocr_key}")
 
-                            # DDCマッチ
-                            ddc_match = match_ddc(dest_name, ddc)
-                            if ddc_match["matched"]:
+                            # ============================================================
+                            # DDCマッチング（完全一致 → 候補選択 → 手動入力）
+                            # ============================================================
+                            ddc_result = match_ddc_candidates(dest_name, ddc)
+                            ddc_match_key = f"ddc_selected_{ocr_key}"
+
+                            if ddc_result["exact_match"]:
+                                # --- 完全一致：自動マッチング ---
+                                ddc_match = ddc_result["matched_row"]
+                                ddc_match["matched"] = True
+                                st.session_state[ddc_match_key] = ddc_match
                                 st.success(f"✅ 納品先マッチ：{ddc_match['name']}")
                                 st.caption(f"住所：{ddc_match['address']} / TEL：{ddc_match['tel']} / パレット：{ddc_match['palette']}")
+
+                            elif ddc_result["candidates"]:
+                                # --- 候補あり：ドロップダウンで選択 ---
+                                st.warning(f"⚠️ 納品先「{dest_name}」の完全一致が見つかりません。候補から選択してください。")
+
+                                # ドロップダウン用の選択肢を作成
+                                candidate_options = [
+                                    f"{c['name']}（類似度：{c['score']:.0%}）"
+                                    for c in ddc_result["candidates"]
+                                ]
+                                candidate_options.append("✋ 該当なし（手動入力）")
+
+                                selected_idx = st.selectbox(
+                                    "納品先候補",
+                                    range(len(candidate_options)),
+                                    format_func=lambda i: candidate_options[i],
+                                    key=f"ddc_cand_{ocr_key}",
+                                )
+
+                                if selected_idx < len(ddc_result["candidates"]):
+                                    # 候補を選択した場合
+                                    chosen = ddc_result["candidates"][selected_idx]
+                                    ddc_match = chosen["row_data"]
+                                    ddc_match["matched"] = True
+                                    st.session_state[ddc_match_key] = ddc_match
+                                    st.info(f"📍 選択中：{chosen['name']}")
+                                    st.caption(f"住所：{ddc_match['address']} / TEL：{ddc_match['tel']} / パレット：{ddc_match['palette']}")
+                                else:
+                                    # 「該当なし」→ 手動入力
+                                    st.markdown("**納品先情報を手動入力：**")
+                                    m_col1, m_col2 = st.columns(2)
+                                    manual_postal = m_col1.text_input("郵便番号", key=f"mp_{ocr_key}")
+                                    manual_address = m_col2.text_input("住所", key=f"ma_{ocr_key}")
+                                    m_col3, m_col4 = st.columns(2)
+                                    manual_tel = m_col3.text_input("電話番号", key=f"mt_{ocr_key}")
+                                    manual_fax = m_col4.text_input("FAX番号", key=f"mf_{ocr_key}")
+                                    ddc_match = {
+                                        "matched": True,
+                                        "name": dest_name,
+                                        "postal": manual_postal,
+                                        "address": manual_address,
+                                        "tel": manual_tel,
+                                        "fax": manual_fax,
+                                        "time": "",
+                                        "berse": "無",
+                                        "palette": "",
+                                        "jpr": "",
+                                        "method": "",
+                                    }
+                                    st.session_state[ddc_match_key] = ddc_match
+
                             else:
-                                st.warning("⚠️ 納品先がマスタに見つかりません。手動で確認してください。")
+                                # --- 候補0件：手動入力 ---
+                                st.warning(f"⚠️ 納品先「{dest_name}」に該当する候補が見つかりません。手動で入力してください。")
+                                st.markdown("**納品先情報を手動入力：**")
+                                m_col1, m_col2 = st.columns(2)
+                                manual_postal = m_col1.text_input("郵便番号", key=f"mp_{ocr_key}")
+                                manual_address = m_col2.text_input("住所", key=f"ma_{ocr_key}")
+                                m_col3, m_col4 = st.columns(2)
+                                manual_tel = m_col3.text_input("電話番号", key=f"mt_{ocr_key}")
+                                manual_fax = m_col4.text_input("FAX番号", key=f"mf_{ocr_key}")
+                                ddc_match = {
+                                    "matched": True,
+                                    "name": dest_name,
+                                    "postal": manual_postal,
+                                    "address": manual_address,
+                                    "tel": manual_tel,
+                                    "fax": manual_fax,
+                                    "time": "",
+                                    "berse": "無",
+                                    "palette": "",
+                                    "jpr": "",
+                                    "method": "",
+                                }
+                                st.session_state[ddc_match_key] = ddc_match
+
+                            # session_stateから最新のddc_matchを取得
+                            ddc_match = st.session_state.get(ddc_match_key, {"matched": False, "name": dest_name})
 
                             # 商品マッチング
                             ocr_items = ocr_result.get("items", [])
@@ -320,5 +404,5 @@ with st.sidebar:
     st.caption(f"DDCマスタ：{len(ddc)}件")
     st.caption(f"担当者：{', '.join(staff_names)}")
     st.markdown("---")
-    st.caption("Version 1.0")
+    st.caption("Version 1.1 - 納品先ファジーマッチング対応")
     st.caption("株式会社TWO 事業管理部")
