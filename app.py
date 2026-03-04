@@ -110,7 +110,9 @@ with tab_auto:
                                 ddc_match["matched"] = True
                                 st.session_state[ddc_match_key] = ddc_match
                                 st.success(f"✅ 納品先マッチ：{ddc_match['name']}")
-                                st.caption(f"住所：{ddc_match['address']} / TEL：{ddc_match['tel']} / パレット：{ddc_match['palette']}")
+                                _pval = str(ddc_match.get('palette', ''))
+                                _pdisp = f" / パレット：{_pval}" if _pval not in ('', 'nan', 'None') else ""
+                                st.caption(f"住所：{ddc_match['address']} / TEL：{ddc_match['tel']}{_pdisp}")
 
                             elif ddc_result["candidates"]:
                                 # --- 候補あり：ドロップダウンで選択 ---
@@ -135,7 +137,9 @@ with tab_auto:
                                     ddc_match["matched"] = True
                                     st.session_state[ddc_match_key] = ddc_match
                                     st.info(f"📍 選択中：{chosen['name']}")
-                                    st.caption(f"住所：{ddc_match['address']} / TEL：{ddc_match['tel']} / パレット：{ddc_match['palette']}")
+                                    _pval2 = str(ddc_match.get('palette', ''))
+                                    _pdisp2 = f" / パレット：{_pval2}" if _pval2 not in ('', 'nan', 'None') else ""
+                                    st.caption(f"住所：{ddc_match['address']} / TEL：{ddc_match['tel']}{_pdisp2}")
                                 else:
                                     # 「該当なし」→ 手動入力 + 再検索 + 新規登録
                                     st.markdown("**納品先情報を手動入力：**")
@@ -390,8 +394,68 @@ with tab_auto:
                                         st.info(f"⏩ 「{ocr_name}」をスキップしました")
 
                                 else:
-                                    # --- 候補0件：スキップ ---
-                                    st.error(f"❌ 未マッチ：{ocr_name}（JAN: {jan_code or '不明'}\uff09- マスタに該当商品が見つかりません")
+                                    # --- 候補0件：マスタから手動選択 + 再検索 ---
+                                    st.warning(f"⚠️ 商品「{ocr_name}」（JAN: {jan_code or '不明'}\uff09の候補が見つかりません。マスタから選択してください。")
+
+                                    # マスタ全商品のドロップダウン
+                                    all_products = [f"{r['商品名']}\uff08{r['出力先']}\uff09" for _, r in pm.iterrows()]
+                                    all_products.append("\u23e9 スキップ")
+
+                                    manual_sel = st.selectbox(
+                                        f"商品を選択：{ocr_name}",
+                                        range(len(all_products)),
+                                        format_func=lambda i, opts=all_products: opts[i],
+                                        key=f"prod_manual_{ocr_key}_{idx}",
+                                    )
+
+                                    if manual_sel < len(pm):
+                                        sel_row = pm.iloc[manual_sel]
+                                        md = {
+                                            "master_name": str(sel_row["商品名"]),
+                                            "jan": str(sel_row["JANコード"]) if pd.notna(sel_row["JANコード"]) else "",
+                                            "code": str(sel_row.get("商品コード", "")),
+                                            "spec": str(sel_row["規格"]),
+                                            "pack": str(sel_row["配送荷姿"]),
+                                            "unit_price": float(sel_row["1袋単価"]),
+                                            "cs_price": float(sel_row["CS単価"]),
+                                            "output_dest": str(sel_row["出力先"]),
+                                        }
+                                        dest = md["output_dest"]
+                                        color = "🔵" if dest == "ハルナ" else "🟤"
+
+                                        col_info, col_price, col_qty_input, col_amt = st.columns([4, 1, 1, 2])
+                                        col_info.markdown(f"{color} **{md['master_name']}**")
+                                        col_price.markdown(f"CS単価  \n¥{md['cs_price']:,.0f}")
+
+                                        edited_qty = col_qty_input.number_input(
+                                            "CS数",
+                                            min_value=0,
+                                            value=ocr_qty,
+                                            step=1,
+                                            key=f"qty_{ocr_key}_{idx}",
+                                        )
+                                        amount = edited_qty * md["cs_price"]
+
+                                        col_amt.markdown(f"金額 ¥{amount:,.0f}  \n→ **{dest}**")
+                                        if edited_qty != ocr_qty:
+                                            col_qty_input.caption(f"(OCR: {ocr_qty})")
+
+                                        matched_items.append({
+                                            "matched": True,
+                                            "ocr_name": ocr_name,
+                                            "master_name": md["master_name"],
+                                            "jan": md["jan"],
+                                            "code": md["code"],
+                                            "spec": md["spec"],
+                                            "pack": md["pack"],
+                                            "unit_price": md["unit_price"],
+                                            "cs_price": md["cs_price"],
+                                            "output_dest": md["output_dest"],
+                                            "quantity": edited_qty,
+                                            "amount": amount,
+                                        })
+                                    else:
+                                        st.info(f"⏩ 「{ocr_name}」をスキップしました")
 
                             # STEP 4: PDF出力
                             st.markdown("---")
@@ -496,7 +560,9 @@ with tab_manual:
         m_dest = st.selectbox("納品先（DDCマスタ）", ddc_names, key="m_dest_haruna")
         ddc_row = ddc[ddc["納品先名"] == m_dest].iloc[0]
 
-        st.caption(f"住所：{ddc_row['住所']} / TEL：{ddc_row['電話番号']} / パレット：{ddc_row['パレット条件']}")
+        _pval3 = str(ddc_row['パレット条件'])
+        _pdisp3 = f" / パレット：{_pval3}" if _pval3 not in ('', 'nan', 'None') else ""
+        st.caption(f"住所：{ddc_row['住所']} / TEL：{ddc_row['電話番号']}{_pdisp3}")
 
         m_qty = st.number_input("発注数量（CS）", min_value=1, value=10, key="m_qty")
         m_remarks = st.text_input("備考/イレギュラーリクエスト", key="m_remarks_h")
@@ -591,5 +657,5 @@ with st.sidebar:
     st.caption(f"DDCマスタ：{len(ddc)}件")
     st.caption(f"担当者：{', '.join(staff_names)}")
     st.markdown("---")
-    st.caption("Version 1.4 - 納品先再検索・新規登録対応")
+    st.caption("Version 1.5 - 商品手動選択・パレットnan修正")
     st.caption("株式会社TWO 事業管理部")
