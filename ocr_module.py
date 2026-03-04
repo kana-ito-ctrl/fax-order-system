@@ -367,4 +367,49 @@ def _product_row_to_dict(row):
     }
 
 
+def save_new_ddc(new_row):
+    """
+    新規納品先をddc_master.csvに追加保存
+
+    Args:
+        new_row (dict): keys = name, postal, address, tel, fax, time, berse, palette, jpr, method
+
+    Returns:
+        dict: {"success": bool, "message": str}
+    """
+    import os
+    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "ddc_master.csv")
+
+    try:
+        # 既存データ読み込み
+        existing = pd.read_csv(csv_path)
+
+        # 重複チェック
+        if new_row["name"].strip() in existing["納品先名"].values:
+            return {"success": False, "message": "同名の納品先が既に登録されています"}
+
+        # 新規行を作成
+        new_df_row = pd.DataFrame([{
+            "納品先名": new_row.get("name", "").strip(),
+            "郵便番号": new_row.get("postal", ""),
+            "住所": new_row.get("address", ""),
+            "電話番号": new_row.get("tel", ""),
+            "FAX番号": new_row.get("fax", ""),
+            "入荷時間": new_row.get("time", ""),
+            "バース予約": new_row.get("berse", ""),
+            "パレット条件": new_row.get("palette", ""),
+            "JPRコード": new_row.get("jpr", ""),
+            "納品方法": new_row.get("method", ""),
+        }])
+
+        # 追記保存
+        updated = pd.concat([existing, new_df_row], ignore_index=True)
+        updated.to_csv(csv_path, index=False, encoding="utf-8")
+
+        return {"success": True, "message": "OK"}
+
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
 import pandas as pd  # needed for match_products
