@@ -5,7 +5,7 @@ import json
 import os
 from io import BytesIO
 from pdf_generator import gen_sylvia_pdf, gen_haruna_pdf, load_product_master, load_ddc_master, load_staff
-from ocr_module import pdf_to_images, ocr_fax_page, match_products, match_ddc, match_ddc_candidates
+from ocr_module import pdf_to_images, ocr_fax_page, match_products, match_ddc, match_ddc_candidates, match_product_candidates
 
 # ========== Page Config ==========
 st.set_page_config(
@@ -191,29 +191,32 @@ with tab_auto:
                             # session_stateから最新のddc_matchを取得
                             ddc_match = st.session_state.get(ddc_match_key, {"matched": False, "name": dest_name})
 
-                            # 商品マッチング
+                            # ============================================================
+                            # 商品マッチング（完全一致 → 候補選択 → 手動入力）
+                            # ============================================================
                             ocr_items = ocr_result.get("items", [])
-                            matched_items = match_products(ocr_items, pm)
+                            matched_items = []
 
-                            # ============================================================
-                            # 商品一覧（数量編集可能）
-                            # ============================================================
                             st.markdown("**商品一覧：**")
-                            st.caption("💡 OCR読取の数量が正しくない場合は、CS数欄で修正してください。")
+                            st.caption("💡 OCR読取の数量が正しくない場合は、CS数欄で修正してください。商品が未マッチの場合は候補から選択できます。")
 
-                            for idx, item in enumerate(matched_items):
-                                if item["matched"]:
-                                    dest = item["output_dest"]
+                            for idx, ocr_item in enumerate(ocr_items):
+                                ocr_name = ocr_item.get("product_name", "")
+                                jan_code = ocr_item.get("jan_code", "")
+                                ocr_qty = int(ocr_item.get("quantity_cs", 0))
+
+                                prod_result = match_product_candidates(ocr_name, jan_code, pm)
+
+                                if prod_result["exact_match"]:
+                                    # --- 完全一致：自動マッチング ---
+                                    md = prod_result["matched_data"]
+                                    dest = md["output_dest"]
                                     color = "🔵" if dest == "ハルナ" else "🟤"
 
-                                    # 4カラム: 商品情報 | CS単価 | 数量入力 | 金額・出力先
                                     col_info, col_price, col_qty_input, col_amt = st.columns([4, 1, 1, 2])
+                                    col_info.markdown(f"{color} **{md['master_name']}**")
+                                    col_price.markdown(f"CS単価  \n¥{md['cs_price']:,.0f}")
 
-                                    col_info.markdown(f"{color} **{item['master_name']}**")
-                                    col_price.markdown(f"CS単価  \n¥{item['cs_price']:,.0f}")
-
-                                    # 数量入力欄（OCR値をデフォルト、ユーザーが修正可能）
-                                    ocr_qty = int(item.get("quantity", 0))
                                     edited_qty = col_qty_input.number_input(
                                         "CS数",
                                         min_value=0,
@@ -221,21 +224,87 @@ with tab_auto:
                                         step=1,
                                         key=f"qty_{ocr_key}_{idx}",
                                     )
+                                    amount = edited_qty * md["cs_price"]
 
-                                    # 編集後の数量と金額をitemに反映
-                                    item["quantity"] = edited_qty
-                                    item["amount"] = edited_qty * float(item["cs_price"])
-
-                                    col_amt.markdown(
-                                        f"金額 ¥{item['amount']:,.0f}  \n→ **{dest}**"
-                                    )
-
-                                    # 数量が変更された場合にOCR元値を表示
+                                    col_amt.markdown(f"金額 ¥{amount:,.0f}  \n→ **{dest}**")
                                     if edited_qty != ocr_qty:
                                         col_qty_input.caption(f"(OCR: {ocr_qty})")
 
+                                    matched_items.append({
+                                        "matched": True,
+                                        "ocr_name": ocr_name,
+                                        "master_name": md["master_name"],
+                                        "jan": md["jan"],
+                                        "code": md["code"],
+                                        "spec": md["spec"],
+                                        "pack": md["pack"],
+                                        "unit_price": md["unit_price"],
+                                        "cs_price": md["cs_price"],
+                                        "output_dest": md["output_dest"],
+                                        "quantity": edited_qty,
+                                        "amount": amount,
+                                    })
+
+                                elif prod_result["candidates"]:
+                                    # --- 候補あり：ドロップダウンで選択 ---
+                                    st.warning(f"⚠️ 商品「{ocr_name}」の完全一致が見つかりません。候補から選択してください。")
+
+                                    cand_options = [
+                                        f"{c['name']}\uff08類似度：{c['score']:.0%}\uff09"
+                                        for c in prod_result["candidates"]
+                                    ]
+                                    cand_options.append("\u270b 該当なし（スキップ）")
+
+                                    sel_idx = st.selectbox(
+                                        f"商品候補：{ocr_name}",
+                                        range(len(cand_options)),
+                                        format_func=lambda i, opts=cand_options: opts[i],
+                                        key=f"prod_cand_{ocr_key}_{idx}",
+                                    )
+
+                                    if sel_idx < len(prod_result["candidates"]):
+                                        chosen = prod_result["candidates"][sel_idx]
+                                        md = chosen["row_data"]
+                                        dest = md["output_dest"]
+                                        color = "🔵" if dest == "ハルナ" else "🟤"
+
+                                        col_info, col_price, col_qty_input, col_amt = st.columns([4, 1, 1, 2])
+                                        col_info.markdown(f"{color} **{md['master_name']}**")
+                                        col_price.markdown(f"CS単価  \n¥{md['cs_price']:,.0f}")
+
+                                        edited_qty = col_qty_input.number_input(
+                                            "CS数",
+                                            min_value=0,
+                                            value=ocr_qty,
+                                            step=1,
+                                            key=f"qty_{ocr_key}_{idx}",
+                                        )
+                                        amount = edited_qty * md["cs_price"]
+
+                                        col_amt.markdown(f"金額 ¥{amount:,.0f}  \n→ **{dest}**")
+                                        if edited_qty != ocr_qty:
+                                            col_qty_input.caption(f"(OCR: {ocr_qty})")
+
+                                        matched_items.append({
+                                            "matched": True,
+                                            "ocr_name": ocr_name,
+                                            "master_name": md["master_name"],
+                                            "jan": md["jan"],
+                                            "code": md["code"],
+                                            "spec": md["spec"],
+                                            "pack": md["pack"],
+                                            "unit_price": md["unit_price"],
+                                            "cs_price": md["cs_price"],
+                                            "output_dest": md["output_dest"],
+                                            "quantity": edited_qty,
+                                            "amount": amount,
+                                        })
+                                    else:
+                                        st.info(f"⏩ 「{ocr_name}」をスキップしました")
+
                                 else:
-                                    st.error(f"❌ 未マッチ：{item['ocr_name']}（JAN: {item.get('jan', '不明')}）")
+                                    # --- 候補0件：スキップ ---
+                                    st.error(f"❌ 未マッチ：{ocr_name}（JAN: {jan_code or '不明'}\uff09- マスタに該当商品が見つかりません")
 
                             # STEP 4: PDF出力
                             st.markdown("---")
@@ -435,5 +504,5 @@ with st.sidebar:
     st.caption(f"DDCマスタ：{len(ddc)}件")
     st.caption(f"担当者：{', '.join(staff_names)}")
     st.markdown("---")
-    st.caption("Version 1.2 - 数量手動修正対応")
+    st.caption("Version 1.3 - 商品候補選択対応")
     st.caption("株式会社TWO 事業管理部")
