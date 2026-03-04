@@ -526,6 +526,7 @@ with tab_auto:
                                     "address": ddc_match.get("address", ""),
                                     "tel": ddc_match.get("tel", ""),
                                     "fax": ddc_match.get("fax", ""),
+                                    "remarks": irregular_msg,
                                 }
                                 pdf_buf = gen_sylvia_pdf(order_data, items_data, selected_staff)
                                 st.download_button(
@@ -639,6 +640,7 @@ with tab_manual:
                 "address": m_address,
                 "tel": m_tel,
                 "fax": m_fax,
+                "remarks": m_remarks_s,
             }
             pdf_buf = gen_sylvia_pdf(order_data, manual_items, manual_staff)
             st.download_button(
