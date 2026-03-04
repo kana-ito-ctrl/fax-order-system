@@ -229,7 +229,7 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
     y -= 24
 
     # 納品先テーブル（パレット条件行なし）
-    dest_cols = [(0, 40), (40, 22), (62, 78), (140, 28), (168, 30)]
+    dest_cols = [(0, 52), (52, 20), (72, 68), (140, 28), (168, 30)]
     dest_labels = ["納品先", "郵便番号", "住所", "電話番号", "FAX番号"]
     hdr_h = 20
     row_h = 34
@@ -246,9 +246,9 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
 
     draw_table_row(c, ml, y, dest_cols, uw, row_h)
     ty = cell_mid_y(y, row_h, 10)
-    draw_clipped(c, order.get('delivery_dest', ''), ml + pad, ty, 39*mm, 10, 12)
-    draw_clipped(c, order.get('postal', ''), ml + 40*mm + pad, ty, 21*mm, 10, 12)
-    draw_clipped(c, safe_str(order.get('address', '')).replace('\n', ' '), ml + 62*mm + pad, ty, 77*mm, 10, 12)
+    draw_clipped(c, order.get('delivery_dest', ''), ml + pad, ty, 51*mm, 10, 12)
+    draw_clipped(c, order.get('postal', ''), ml + 52*mm + pad, ty, 19*mm, 10, 12)
+    draw_clipped(c, safe_str(order.get('address', '')).replace('\n', ' '), ml + 72*mm + pad, ty, 67*mm, 10, 12)
     draw_clipped(c, order.get('tel', ''), ml + 140*mm + pad, ty, 27*mm, 10, 12)
     draw_clipped(c, order.get('fax', ''), ml + 168*mm + pad, ty, 29*mm, 10, 12)
     y -= row_h + 8
@@ -321,6 +321,16 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
     c.setFillColor(SYL_PRIMARY)
     c.drawString(tx, y, "合計")
     c.drawRightString(w - mr - 5*mm, y, "\xa5%s" % "{:,}".format(total))
+    c.setFillColor(colors.black)
+
+    # 備考/イレギュラーリクエスト（下部に大きめフォントで表示）
+    syl_remarks = safe_str(order.get('remarks', ''))
+    if syl_remarks:
+        y -= 30
+        c.setFillColor(SYL_PRIMARY)
+        c.setFont(FONT, 14)
+        c.drawString(ml, y, "※ %s" % syl_remarks)
+        c.setFillColor(colors.black)
 
     c.showPage()
     c.save()
@@ -395,14 +405,10 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     c.drawString(ml + 85*mm, y, "納品日：")
     c.setFont(FONT, 13)
     c.drawString(ml + 105*mm, y, safe_str(order.get('delivery_date', '')))
-    remarks = safe_str(order.get('remarks', ''))
-    if remarks:
-        c.setFont(FONT, 11)
-        c.drawString(w - mr - 70*mm, y, "備考：%s" % remarks)
     y -= 24
 
     # 納品先テーブル
-    dest_cols = [(0, 42), (42, 22), (64, 72), (136, 24), (160, 22), (182, 16)]
+    dest_cols = [(0, 52), (52, 20), (72, 64), (136, 24), (160, 22), (182, 16)]
     dest_labels = ["納品先", "郵便番号", "住所", "電話番号", "FAX番号", "入荷時間"]
     hdr_h = 20
     row_h = 32
@@ -419,9 +425,9 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
 
     draw_table_row(c, ml, y, dest_cols, uw, row_h)
     ty = cell_mid_y(y, row_h, 10)
-    draw_clipped(c, order.get('delivery_dest', ''), ml + pad, ty, 41*mm, 10, 12)
-    draw_clipped(c, ddc.get('postal', ''), ml + 42*mm + pad, ty, 21*mm, 10)
-    draw_clipped(c, safe_str(ddc.get('address', '')).replace('\n', ' '), ml + 64*mm + pad, ty, 71*mm, 10, 12)
+    draw_clipped(c, order.get('delivery_dest', ''), ml + pad, ty, 51*mm, 10, 12)
+    draw_clipped(c, ddc.get('postal', ''), ml + 52*mm + pad, ty, 19*mm, 10)
+    draw_clipped(c, safe_str(ddc.get('address', '')).replace('\n', ' '), ml + 72*mm + pad, ty, 63*mm, 10, 12)
     draw_clipped(c, ddc.get('tel', ''), ml + 136*mm + pad, ty, 23*mm, 10)
     draw_clipped(c, ddc.get('fax', ''), ml + 160*mm + pad, ty, 21*mm, 10)
     draw_clipped(c, ddc.get('time', ''), ml + 182*mm + pad, ty, 15*mm, 9)
@@ -494,6 +500,15 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     c.drawRightString(ml + 172*mm - pad, y, "小　　計")
     c.setFont(FONT, 13)
     c.drawRightString(ml + 198*mm - pad, y, "{:,} 本".format(bara))
+
+    # 備考/イレギュラーリクエスト（下部に大きめフォントで表示）
+    har_remarks = safe_str(order.get('remarks', ''))
+    if har_remarks:
+        y -= 30
+        c.setFillColor(HAR_PRIMARY)
+        c.setFont(FONT, 14)
+        c.drawString(ml, y, "※ %s" % har_remarks)
+        c.setFillColor(colors.black)
 
     c.showPage()
     c.save()
