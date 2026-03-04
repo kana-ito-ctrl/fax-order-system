@@ -455,7 +455,7 @@ with tab_auto:
                                     "order_no": order_no,
                                     "order_date": order_date,
                                     "delivery_date": delivery_date,
-                                    "delivery_dest": dest_name,
+                                    "delivery_dest": ddc_match.get("name", dest_name),
                                     "postal": ddc_match.get("postal", ""),
                                     "address": ddc_match.get("address", ""),
                                     "tel": ddc_match.get("tel", ""),
