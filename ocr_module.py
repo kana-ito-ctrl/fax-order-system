@@ -269,5 +269,102 @@ def _row_to_dict(row):
         "method": str(row.get("納品方法", "")),
     }
 
+def match_product_candidates(ocr_name, jan_code, product_master, max_candidates=5):
+    """
+    商品名をproduct_masterとマッチング（候補付き）
+
+    1. JANコード完全一致 -> exact_match
+    2. 商品名完全一致 -> exact_match
+    3. 部分一致 + 類似度 -> 候補リスト
+
+    Returns:
+        dict:
+            exact_match (bool)
+            matched_data (dict|None): マッチした商品データ
+            candidates (list[dict]): 候補リスト（類似度順）
+              各要素: {"name": str, "score": float, "row_data": dict}
+            ocr_name (str): OCR読取の商品名
+            jan (str): JANコード
+    """
+    from difflib import SequenceMatcher
+
+    ocr_name_clean = str(ocr_name).strip()
+    jan = str(jan_code).strip() if jan_code else ""
+
+    # --- 1. JANコード完全一致 ---
+    if jan and len(jan) == 13:
+        m = product_master[product_master["JANコード"] == jan]
+        if len(m) > 0:
+            row = m.iloc[0]
+            return {
+                "exact_match": True,
+                "matched_data": _product_row_to_dict(row),
+                "candidates": [],
+                "ocr_name": ocr_name_clean,
+                "jan": jan,
+            }
+
+    # --- 2. 商品名完全一致 ---
+    if ocr_name_clean:
+        exact = product_master[product_master["商品名"] == ocr_name_clean]
+        if len(exact) > 0:
+            row = exact.iloc[0]
+            return {
+                "exact_match": True,
+                "matched_data": _product_row_to_dict(row),
+                "candidates": [],
+                "ocr_name": ocr_name_clean,
+                "jan": jan,
+            }
+
+    # --- 3. 部分一致 + 類似度スコアリング ---
+    if not ocr_name_clean:
+        return {"exact_match": False, "matched_data": None, "candidates": [], "ocr_name": ocr_name_clean, "jan": jan}
+
+    scored = []
+    for _, row in product_master.iterrows():
+        master_name = str(row["商品名"])
+        score = 0.0
+
+        # 部分一致ボーナス
+        if ocr_name_clean in master_name or master_name in ocr_name_clean:
+            score = 0.80
+
+        # SequenceMatcherの類似度
+        seq_ratio = SequenceMatcher(None, ocr_name_clean, master_name).ratio()
+        final_score = max(score, seq_ratio)
+
+        if final_score >= 0.3:
+            scored.append({
+                "name": master_name,
+                "score": final_score,
+                "row_data": _product_row_to_dict(row),
+            })
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    candidates = scored[:max_candidates]
+
+    return {
+        "exact_match": False,
+        "matched_data": None,
+        "candidates": candidates,
+        "ocr_name": ocr_name_clean,
+        "jan": jan,
+    }
+
+
+def _product_row_to_dict(row):
+    """商品マスタの1行をdictに変換"""
+    return {
+        "master_name": str(row.get("商品名", "")),
+        "jan": str(row.get("JANコード", "")) if pd.notna(row.get("JANコード", "")) else "",
+        "code": str(row.get("商品コード", "")),
+        "spec": str(row.get("規格", "")),
+        "pack": str(row.get("配送荷姿", "")),
+        "unit_price": float(row.get("1袋単価", 0)),
+        "cs_price": float(row.get("CS単価", 0)),
+        "output_dest": str(row.get("出力先", "")),
+    }
+
 
 import pandas as pd  # needed for match_products
