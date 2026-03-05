@@ -95,7 +95,8 @@ with tab_auto:
                             col1, col2, col3 = st.columns(3)
                             order_no = col1.text_input("オーダーNO", ocr_result.get("order_no", ""), key=f"on_{ocr_key}")
                             delivery_date = col2.text_input("納品日", ocr_result.get("delivery_date", ""), key=f"dd_{ocr_key}")
-                            order_date = col3.text_input("発注日", ocr_result.get("order_date", ""), key=f"od_{ocr_key}")
+                            from datetime import date
+                            order_date = col3.text_input("発注日", str(date.today()), key=f"od_{ocr_key}")
 
                             dest_name = st.text_input("納品先", ocr_result.get("delivery_dest", ""), key=f"dn_{ocr_key}")
 
