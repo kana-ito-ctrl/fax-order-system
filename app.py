@@ -391,6 +391,56 @@ with tab_auto:
                                     st.caption(f"エラー詳細：{str(prod_err)}")
                                     _manual_product_select(st, pm, pd, str(ocr_item.get("product_name", f"商品{idx+1}")), 0, ocr_key, idx, matched_items, key_prefix="prod_err")
 
+                            # ============================================================
+                            # 商品追加（OCR読取漏れ対応）
+                            # ============================================================
+                            st.markdown("---")
+                            add_key = f"add_count_{ocr_key}"
+                            if add_key not in st.session_state:
+                                st.session_state[add_key] = 0
+
+                            if st.button("➕ 商品を追加", key=f"add_btn_{ocr_key}"):
+                                st.session_state[add_key] += 1
+
+                            for add_idx in range(st.session_state[add_key]):
+                                st.markdown(f"**追加商品 {add_idx + 1}：**")
+                                add_products = [f"{r['商品名']}（{r['出力先']}）" for _, r in pm.iterrows()]
+                                add_sel = st.selectbox(
+                                    f"商品を選択",
+                                    range(len(add_products)),
+                                    format_func=lambda i, opts=add_products: opts[i],
+                                    key=f"add_prod_{ocr_key}_{add_idx}",
+                                )
+                                add_row = pm.iloc[add_sel]
+                                add_dest = str(add_row["出力先"])
+                                add_color = "🔵" if add_dest == "ハルナ" else "🟤"
+                                add_cs_price = float(add_row["CS単価"])
+
+                                col_i, col_p, col_q, col_a = st.columns([4, 1, 1, 2])
+                                col_i.markdown(f"{add_color} **{add_row['商品名']}**")
+                                col_p.markdown(f"CS単価  \n¥{add_cs_price:,.0f}")
+                                add_qty = col_q.number_input(
+                                    "CS数", min_value=0, value=1, step=1,
+                                    key=f"add_qty_{ocr_key}_{add_idx}",
+                                )
+                                add_amount = add_qty * add_cs_price
+                                col_a.markdown(f"金額 ¥{add_amount:,.0f}  \n→ **{add_dest}**")
+
+                                matched_items.append({
+                                    "matched": True,
+                                    "ocr_name": "(手動追加)",
+                                    "master_name": str(add_row["商品名"]),
+                                    "jan": str(add_row["JANコード"]) if pd.notna(add_row["JANコード"]) else "",
+                                    "code": str(add_row.get("商品コード", "")),
+                                    "spec": str(add_row["規格"]),
+                                    "pack": str(add_row["配送荷姿"]),
+                                    "unit_price": float(add_row["1袋単価"]),
+                                    "cs_price": add_cs_price,
+                                    "output_dest": add_dest,
+                                    "quantity": add_qty,
+                                    "amount": add_amount,
+                                })
+
                             # STEP 4: PDF出力
                             st.markdown("---")
                             st.subheader("STEP 4：発注書PDF出力")
@@ -593,5 +643,5 @@ with st.sidebar:
     st.caption(f"DDCマスタ：{len(ddc)}件")
     st.caption(f"担当者：{', '.join(staff_names)}")
     st.markdown("---")
-    st.caption("Version 1.5 - 商品手動選択・パレットnan修正")
+    st.caption("Version 1.7 - 商品追加ボタン対応")
     st.caption("株式会社TWO 事業管理部")
