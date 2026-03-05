@@ -644,5 +644,5 @@ with st.sidebar:
     st.caption(f"DDCマスタ：{len(ddc)}件")
     st.caption(f"担当者：{', '.join(staff_names)}")
     st.markdown("---")
-    st.caption("Version 1.7 - 商品追加ボタン対応")
+    st.caption("Version 1.8 - OCR精度改善・発注日システム日付")
     st.caption("株式会社TWO 事業管理部")
