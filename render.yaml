@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: fax-order-system
+    runtime: python
+    buildCommand: pip install -r requirements.txt && bash setup_fonts.sh
+    startCommand: gunicorn web_app:app --bind 0.0.0.0:$PORT --timeout 120
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: HOST
+        value: 0.0.0.0
+      - key: PYTHON_VERSION
+        value: "3.13"
