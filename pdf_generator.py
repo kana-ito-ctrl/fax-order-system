@@ -37,7 +37,27 @@ for fp in FONT_PATHS:
             continue
 
 if not _font_registered:
-    print("WARNING: Japanese font not found. PDF output may have missing characters.")
+    # フォントが見つからない場合、ダウンロードして登録を試みる
+    import urllib.request
+    _font_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    _local_font = os.path.join(_font_dir, "ipag.ttf")
+    if not os.path.exists(_local_font):
+        try:
+            print("  [Font] 日本語フォントをダウンロード中...")
+            _url = "https://github.com/nicokosi/ipafont/raw/master/ipag.ttf"
+            urllib.request.urlretrieve(_url, _local_font)
+            print("  [Font] ダウンロード完了")
+        except Exception as e:
+            print(f"  [Font] ダウンロード失敗: {e}")
+    if os.path.exists(_local_font):
+        try:
+            pdfmetrics.registerFont(TTFont(FONT, _local_font))
+            _font_registered = True
+            print("  [Font] ipag.ttf を登録しました")
+        except Exception:
+            pass
+    if not _font_registered:
+        print("WARNING: Japanese font not found. PDF output may have missing characters.")
 
 # Theme Colors
 SYL_PRIMARY = colors.HexColor("#8B4513")
