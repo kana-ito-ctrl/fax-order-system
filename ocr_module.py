@@ -289,7 +289,14 @@ def match_product(ocr_item, product_master):
     """Match a single OCR item to product master.
     Returns dict with matched product data or None."""
     jan = str(ocr_item.get("jan_code", "")).strip()
+    product_code = str(ocr_item.get("product_code", "")).strip()
     ocr_name = normalize(ocr_item.get("product_name", ""))
+
+    # 0. Product code exact match (自社管理商品コード)
+    if product_code:
+        m = product_master[product_master["商品コード"] == product_code]
+        if len(m) > 0:
+            return _product_row_to_dict(m.iloc[0], ocr_item)
 
     # 1. JAN code exact match
     if jan and len(jan) == 13:
@@ -559,13 +566,29 @@ def match_ddc(dest_name, ddc_master, max_candidates=3, sender=""):
 
 
 def _ddc_row_to_dict(row):
-    """Convert a DDC master row to dict"""
+    """Convert a DDC master row to dict, haruna_conditionsから入荷時間等を補完"""
     def safe(val):
         s = str(val).strip() if val is not None else ""
         return "" if s.lower() in ("nan", "none", "null") else s
+
+    name = safe(row.get("納品先名", ""))
+
+    # haruna_conditionsから入荷時間・バース予約・パレット条件を取得
+    # 完全一致 → 部分一致（DDCマスタの名前が長い場合に対応）
+    from supabase_client import load_haruna_conditions
+    haruna = load_haruna_conditions()
+    hc = haruna.get(name, None)
+    if hc is None and name:
+        for hname, hdata in haruna.items():
+            if hname in name or name in hname:
+                hc = hdata
+                break
+    if hc is None:
+        hc = {}
+
     return {
         "matched": True,
-        "name": safe(row.get("納品先名", "")),
+        "name": name,
         "nohinsaki_code": safe(row.get("納品先コード", "")),
         "torihikisaki": safe(row.get("取引先名", "")),
         "torihikisaki_code": safe(row.get("取引先コード", "")),
@@ -573,10 +596,10 @@ def _ddc_row_to_dict(row):
         "address": safe(row.get("住所", "")),
         "tel": safe(row.get("電話番号", "")),
         "fax": safe(row.get("FAX番号", "")),
-        "time": safe(row.get("入荷時間", "")),
-        "berse": safe(row.get("バース予約", "")),
-        "palette": safe(row.get("パレット条件", "")),
-        "jpr": safe(row.get("JPRコード", "")),
+        "time": hc.get("arrival_time", ""),
+        "berse": hc.get("basse_reservation", ""),
+        "palette": hc.get("pallet_condition", ""),
+        "jpr": hc.get("jpr_code", ""),
         "method": safe(row.get("納品方法", "")),
     }
 

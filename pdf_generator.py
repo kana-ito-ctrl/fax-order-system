@@ -226,30 +226,40 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
     c.drawString(w - mr - 75 * mm, y, "発注額：\xa5%s（税込）" % "{:,}".format(total))
     y -= 24
 
-    # Destination table
-    dest_cols = [(0, 52), (52, 20), (72, 68), (140, 28), (168, 30)]
-    dest_labels = ["納品先", "郵便番号", "住所", "電話番号", "FAX番号"]
-    hdr_h = 20
-    row_h = 34
+    # Destination table (3行レイアウト: 納品先 / 郵便番号+住所 / 電話+FAX)
+    dest_row_h = 22
+    label_w = 28 * mm
+    val_w = uw - label_w
 
-    c.setFillColor(SYL_LIGHT)
-    c.rect(ml, y - hdr_h, uw, hdr_h, fill=True, stroke=False)
-    c.setFillColor(SYL_PRIMARY)
-    c.setFont(FONT, 10)
-    hdr_ty = cell_mid_y(y, hdr_h, 10)
-    for (xo, wc), label in zip(dest_cols, dest_labels):
-        c.drawString(ml + xo * mm + pad, hdr_ty, label)
-    c.setFillColor(colors.black)
-    y -= hdr_h
+    def _syl_dest_row(label, value, row_top, fs=12):
+        c.setFillColor(SYL_LIGHT)
+        c.rect(ml, row_top - dest_row_h, label_w, dest_row_h, fill=True, stroke=False)
+        c.setFillColor(SYL_PRIMARY)
+        c.setFont(FONT, 10)
+        c.drawString(ml + pad, cell_mid_y(row_top, dest_row_h, 10), label)
+        c.setFillColor(colors.black)
+        c.setStrokeColor(colors.HexColor("#999999"))
+        c.setLineWidth(0.5)
+        c.rect(ml, row_top - dest_row_h, uw, dest_row_h, fill=False, stroke=True)
+        c.line(ml + label_w, row_top - dest_row_h, ml + label_w, row_top)
+        c.setStrokeColor(colors.black)
+        c.setLineWidth(1)
+        draw_clipped(c, value, ml + label_w + pad, cell_mid_y(row_top, dest_row_h, fs), val_w - pad * 2, fs)
 
-    draw_table_row(c, ml, y, dest_cols, uw, row_h)
-    ty = cell_mid_y(y, row_h, 10)
-    draw_clipped(c, order.get('delivery_dest', ''), ml + pad, ty, 51 * mm, 10, 12)
-    draw_clipped(c, order.get('postal', ''), ml + 52 * mm + pad, ty, 19 * mm, 10, 12)
-    draw_clipped(c, safe_str(order.get('address', '')).replace('\n', ' '), ml + 72 * mm + pad, ty, 67 * mm, 10, 12)
-    draw_clipped(c, order.get('tel', ''), ml + 140 * mm + pad, ty, 27 * mm, 10, 12)
-    draw_clipped(c, order.get('fax', ''), ml + 168 * mm + pad, ty, 29 * mm, 10, 12)
-    y -= row_h + 8
+    _syl_dest_row("納品先", order.get('delivery_dest', ''), y, 13)
+    y -= dest_row_h
+    postal = safe_str(order.get('postal', ''))
+    address = safe_str(order.get('address', '')).replace('\n', ' ')
+    addr_val = ("〒%s %s" % (postal, address)) if postal else address
+    _syl_dest_row("住所", addr_val, y, 12)
+    y -= dest_row_h
+    tel = safe_str(order.get('tel', ''))
+    fax = safe_str(order.get('fax', ''))
+    tel_val = "TEL: %s" % tel if tel else ""
+    if fax:
+        tel_val += "　　FAX: %s" % fax
+    _syl_dest_row("電話番号", tel_val, y, 11)
+    y -= dest_row_h + 8
 
     # Product table
     prod_cols = [
@@ -406,31 +416,45 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     c.drawString(ml + 105 * mm, y, safe_str(order.get('delivery_date', '')))
     y -= 24
 
-    # Destination table
-    dest_cols = [(0, 52), (52, 20), (72, 64), (136, 24), (160, 22), (182, 16)]
-    dest_labels = ["納品先", "郵便番号", "住所", "電話番号", "FAX番号", "入荷時間"]
-    hdr_h = 20
-    row_h = 32
+    # Destination table (3行レイアウト: 納品先 / 郵便番号+住所 / 電話+FAX+入荷時間)
+    dest_row_h = 22
+    label_w = 28 * mm
+    val_w = uw - label_w
 
-    c.setFillColor(HAR_LIGHT)
-    c.rect(ml, y - hdr_h, uw, hdr_h, fill=True, stroke=False)
-    c.setFillColor(HAR_PRIMARY)
-    c.setFont(FONT, 10)
-    hdr_ty = cell_mid_y(y, hdr_h, 10)
-    for (xo, wc), label in zip(dest_cols, dest_labels):
-        c.drawString(ml + xo * mm + pad, hdr_ty, label)
-    c.setFillColor(colors.black)
-    y -= hdr_h
+    def _har_dest_row(label, value, row_top, fs=12):
+        c.setFillColor(HAR_LIGHT)
+        c.rect(ml, row_top - dest_row_h, label_w, dest_row_h, fill=True, stroke=False)
+        c.setFillColor(HAR_PRIMARY)
+        c.setFont(FONT, 10)
+        c.drawString(ml + pad, cell_mid_y(row_top, dest_row_h, 10), label)
+        c.setFillColor(colors.black)
+        c.setStrokeColor(colors.HexColor("#999999"))
+        c.setLineWidth(0.5)
+        c.rect(ml, row_top - dest_row_h, uw, dest_row_h, fill=False, stroke=True)
+        c.line(ml + label_w, row_top - dest_row_h, ml + label_w, row_top)
+        c.setStrokeColor(colors.black)
+        c.setLineWidth(1)
+        draw_clipped(c, value, ml + label_w + pad, cell_mid_y(row_top, dest_row_h, fs), val_w - pad * 2, fs)
 
-    draw_table_row(c, ml, y, dest_cols, uw, row_h)
-    ty = cell_mid_y(y, row_h, 10)
-    draw_clipped(c, order.get('delivery_dest', ''), ml + pad, ty, 51 * mm, 10, 12)
-    draw_clipped(c, ddc.get('postal', ''), ml + 52 * mm + pad, ty, 19 * mm, 10)
-    draw_clipped(c, safe_str(ddc.get('address', '')).replace('\n', ' '), ml + 72 * mm + pad, ty, 63 * mm, 10, 12)
-    draw_clipped(c, ddc.get('tel', ''), ml + 136 * mm + pad, ty, 23 * mm, 10)
-    draw_clipped(c, ddc.get('fax', ''), ml + 160 * mm + pad, ty, 21 * mm, 10)
-    draw_clipped(c, ddc.get('time', ''), ml + 182 * mm + pad, ty, 15 * mm, 9)
-    y -= row_h + 4
+    _har_dest_row("納品先", order.get('delivery_dest', ''), y, 13)
+    y -= dest_row_h
+    postal = safe_str(ddc.get('postal', ''))
+    address = safe_str(ddc.get('address', '')).replace('\n', ' ')
+    addr_val = ("〒%s %s" % (postal, address)) if postal else address
+    _har_dest_row("住所", addr_val, y, 12)
+    y -= dest_row_h
+    tel = safe_str(ddc.get('tel', ''))
+    fax = safe_str(ddc.get('fax', ''))
+    time_val = safe_str(ddc.get('time', ''))
+    tel_parts = []
+    if tel:
+        tel_parts.append("TEL: %s" % tel)
+    if fax:
+        tel_parts.append("FAX: %s" % fax)
+    if time_val:
+        tel_parts.append("入荷時間: %s" % time_val)
+    _har_dest_row("電話番号", "　　".join(tel_parts), y, 11)
+    y -= dest_row_h + 4
 
     # Palette info table (Haruna only)
     info_cols = [(0, 50), (50, 60), (110, 88)]

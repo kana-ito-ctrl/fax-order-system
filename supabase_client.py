@@ -42,7 +42,7 @@ def load_product_master_from_supabase() -> pd.DataFrame | None:
     # product_master_scm を取得（卸対象・販売中のみ）
     pm_rows = _paginated_get(
         "product_master_scm",
-        "select=product_code,product_name,jan_code,case_quantity,temperature_zone"
+        "select=product_code,product_name,jan_code,case_quantity,temperature_zone,notes"
         "&is_wholesale=eq.true&is_discontinued=eq.false"
     )
     if not pm_rows:
@@ -72,16 +72,30 @@ def load_product_master_from_supabase() -> pd.DataFrame | None:
         except (ValueError, TypeError):
             case_qty = 0
 
+        # fax_product_masterにない商品はnotesからメタ情報を取得
+        notes = pm.get("notes") or ""
+        def _notes_val(key):
+            if key + ":" in notes:
+                return notes.split(key + ":")[1].split()[0].strip()
+            return ""
+
+        output_dest = fax.get("output_dest", "") or _notes_val("output_dest")
+        spec = fax.get("spec", "") or _notes_val("spec")
+        pack = fax.get("pack", "") or _notes_val("pack")
+        unit_price = float(fax.get("unit_price") or 0) or float(_notes_val("unit_price") or 0)
+        if not cs_price:
+            cs_price = float(_notes_val("cs_price") or 0)
+
         rows.append({
             "温度帯": pm.get("temperature_zone", ""),
             "商品コード": pm.get("product_code", ""),
             "商品名": pm.get("product_name", ""),
-            "規格": fax.get("spec", ""),
-            "配送荷姿": fax.get("pack", ""),
-            "1袋単価": float(fax.get("unit_price") or 0),
+            "規格": spec,
+            "配送荷姿": pack,
+            "1袋単価": unit_price,
             "CS単価": cs_price,
             "改定単価": 0,
-            "出力先": fax.get("output_dest", ""),
+            "出力先": output_dest,
             "JANコード": jan,
             "入数": case_qty,
             "price_display": fax.get("price_display", "cs"),

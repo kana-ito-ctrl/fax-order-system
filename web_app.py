@@ -32,7 +32,7 @@ from ocr_module import (
     match_ddc, match_product, load_staff, ocr_fax_page, normalize, normalize_company,
     _ddc_row_to_dict,
 )
-from process_fax import generate_pdfs, results_to_excel, results_to_csv, results_to_ne_csv, results_to_coola_csv, ensure_output_dir, OUTPUT_DIR
+from process_fax import generate_pdfs, results_to_excel, results_to_csv, results_to_ne_csv, results_to_coola_csv, parse_paltac_csv, parse_infomart_csv, ensure_output_dir, OUTPUT_DIR
 from pdf_generator import gen_sylvia_pdf, gen_haruna_pdf
 from datetime import date
 
@@ -41,6 +41,22 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 # In-memory session store (single-user local app)
 sessions = {}
+
+# TWO受注NO採番（YYMMDDNNN: 日付6桁+連番3桁）
+_two_order_date = ""
+_two_order_seq = 0
+
+
+def generate_two_order_no():
+    """TWO受注NOを自動採番する。YYMMDDNNN形式（9桁数字）"""
+    global _two_order_date, _two_order_seq
+    today = date.today().strftime("%y%m%d")
+    if today != _two_order_date:
+        _two_order_date = today
+        _two_order_seq = 0
+    _two_order_seq += 1
+    return f"{today}{_two_order_seq:03d}"
+
 
 # Pre-loaded master data (loaded once at startup)
 _ddc_master_df = None
@@ -97,15 +113,117 @@ def api_ddc_list():
     return jsonify(get_ddc_list())
 
 
+@app.route("/api/manual_entry", methods=["POST"])
+def api_manual_entry():
+    """手入力モード: 空の受注データを作成"""
+    session_id = str(uuid.uuid4())[:8]
+    results = [{
+        "page": 1,
+        "source": "manual",
+        "two_order_no": generate_two_order_no(),
+        "ocr_raw": {
+            "order_no": "",
+            "delivery_date": "",
+            "delivery_dest": "",
+            "sender": "",
+            "notes": "",
+            "items": [],
+        },
+        "matched_items": [],
+        "ddc_match": {"matched": False, "name": "", "candidates": []},
+        "sylvia_items": [],
+        "haruna_items": [],
+    }]
+    sessions[session_id] = {
+        "pdf_bytes": None,
+        "pdf_name": "manual_entry.csv",
+        "pages": [],
+        "results": results,
+        "source": "manual",
+    }
+    return jsonify({
+        "session_id": session_id,
+        "filename": "手入力",
+        "page_count": 1,
+        "source": "manual",
+        "auto_results": True,
+    })
+
+
+@app.route("/api/product_list")
+def api_product_list():
+    """商品マスタの商品名リストを返す（プルダウン用）"""
+    df = get_product_master()
+    items = []
+    for _, row in df.iterrows():
+        name = str(row.get("商品名", "")).strip()
+        jan = str(row.get("JANコード", "")).strip()
+        code = str(row.get("商品コード", "")).strip()
+        case_qty = int(row.get("入数", 0) or 0)
+        output_dest = str(row.get("出力先", "")).strip()
+        cs_price = float(row.get("CS単価", 0) or 0)
+        if name:
+            items.append({
+                "name": name, "jan": jan, "code": code,
+                "case_quantity": case_qty, "output_dest": output_dest,
+                "cs_price": cs_price,
+            })
+    return jsonify(items)
+
+
 @app.route("/api/upload", methods=["POST"])
 def api_upload():
-    """Upload PDF, convert to page images, return session_id + page list"""
+    """Upload PDF or PALTAC CSV"""
     if "file" not in request.files:
         return jsonify({"error": "ファイルが選択されていません"}), 400
 
     f = request.files["file"]
-    if not f.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "PDFファイルを選択してください"}), 400
+    fname = f.filename.lower()
+
+    # CSV処理（PALTAC or インフォマート自動判別）
+    if fname.endswith(".csv"):
+        csv_bytes = f.read()
+        session_id = str(uuid.uuid4())[:8]
+
+        # インフォマート判定: 1行目が "H" で始まる
+        try:
+            first_line = csv_bytes.decode('shift-jis', errors='replace').split('\n')[0]
+        except Exception:
+            first_line = ""
+
+        if first_line.startswith('"H"') or first_line.startswith('H,'):
+            source = "infomart"
+            results = parse_infomart_csv(csv_bytes, f.filename)
+            error_msg = "インフォマートCSVにデータが見つかりません"
+        else:
+            source = "paltac"
+            results = parse_paltac_csv(csv_bytes, f.filename)
+            error_msg = "発注データが見つかりません（届先区分「発注」のみ取込対象）"
+
+        if not results:
+            return jsonify({"error": error_msg}), 400
+
+        # TWO受注NOを採番
+        for r in results:
+            r["two_order_no"] = generate_two_order_no()
+
+        sessions[session_id] = {
+            "pdf_bytes": None,
+            "pdf_name": f.filename,
+            "pages": [],
+            "results": results,
+            "source": source,
+        }
+        return jsonify({
+            "session_id": session_id,
+            "filename": f.filename,
+            "page_count": len(results),
+            "source": source,
+            "auto_results": True,
+        })
+
+    if not fname.endswith(".pdf"):
+        return jsonify({"error": "PDFまたはCSVファイルを選択してください"}), 400
 
     pdf_bytes = f.read()
     session_id = str(uuid.uuid4())[:8]
@@ -143,12 +261,16 @@ def api_page_image(session_id, page):
 
 @app.route("/api/ocr", methods=["POST"])
 def api_ocr():
-    """Run OCR + matching on uploaded PDF"""
+    """Run OCR + matching on uploaded PDF, or return pre-parsed PALTAC results"""
     data = request.get_json()
     session_id = data.get("session_id")
     sess = sessions.get(session_id)
     if not sess:
         return jsonify({"error": "セッションが見つかりません"}), 404
+
+    # CSV（PALTAC/インフォマート）/ 手入力: 既にパース済みの結果を返す
+    if sess.get("source") in ("paltac", "infomart", "manual") and sess.get("results"):
+        return jsonify({"pages": sess["results"]})
 
     pm = get_product_master()
     ddc = get_ddc_master()
@@ -201,9 +323,13 @@ def api_ocr():
         sylvia_items = [i for i in matched_items if i.get("matched") and i.get("output_dest") == "シルビア"]
         haruna_items = [i for i in matched_items if i.get("matched") and i.get("output_dest") == "ハルナ"]
 
+        # TWO受注NO自動採番
+        two_order_no = generate_two_order_no()
+
         results.append({
             "page": page_info["page"],
             "ocr_raw": ocr_result,
+            "two_order_no": two_order_no,
             "matched_items": matched_items,
             "ddc_match": ddc_match,
             "sylvia_items": sylvia_items,
@@ -255,26 +381,47 @@ def api_confirm():
                             r["ddc_match"]["match_score"] = 1.0
                             r["ddc_match"]["low_confidence"] = False
                             break
-                # Update quantities if changed
+                # Update items (quantities, expiry, product changes, additions)
                 if up.get("items"):
+                    # 手入力で商品数が変わった場合、matched_itemsを再構築
+                    new_items = []
                     for ui in up["items"]:
                         idx = ui.get("index")
                         if idx is not None and idx < len(r["matched_items"]):
                             mi = r["matched_items"][idx]
-                            if "quantity" in ui:
-                                mi["quantity"] = ui["quantity"]
-                                if mi.get("cs_price"):
-                                    mi["amount"] = mi["quantity"] * mi["cs_price"]
-                            if "expiry_date" in ui:
-                                mi["expiry_date"] = ui["expiry_date"]
-                            if "double_pack" in ui:
-                                mi["double_pack"] = ui["double_pack"]
+                        else:
+                            mi = {}
+                        # フロントから送られた値で更新
+                        if ui.get("matched"):
+                            mi["matched"] = True
+                            mi["master_name"] = ui.get("master_name", mi.get("master_name", ""))
+                            mi["jan"] = ui.get("jan", mi.get("jan", ""))
+                            mi["code"] = ui.get("code", mi.get("code", ""))
+                            mi["output_dest"] = ui.get("output_dest", mi.get("output_dest", ""))
+                            mi["case_quantity"] = ui.get("case_quantity", mi.get("case_quantity", 0))
+                            mi["cs_price"] = ui.get("cs_price", mi.get("cs_price", 0))
+                        if "quantity" in ui:
+                            mi["quantity"] = ui["quantity"]
+                            if mi.get("cs_price"):
+                                mi["amount"] = mi["quantity"] * mi["cs_price"]
+                        if "expiry_date" in ui:
+                            mi["expiry_date"] = ui["expiry_date"]
+                        if "double_pack" in ui:
+                            mi["double_pack"] = ui["double_pack"]
+                        new_items.append(mi)
+                    r["matched_items"] = new_items
                 # Update delivery date
                 if up.get("delivery_date"):
                     r["ocr_raw"]["delivery_date"] = up["delivery_date"]
                 # Update order_no
                 if up.get("order_no"):
                     r["ocr_raw"]["order_no"] = up["order_no"]
+                # Update TWO受注NO
+                if up.get("two_order_no"):
+                    r["two_order_no"] = up["two_order_no"]
+                # Update remarks (per page)
+                if "remarks" in up:
+                    r["remarks"] = up["remarks"]
                 # Re-split sylvia/haruna
                 r["sylvia_items"] = [i for i in r["matched_items"] if i.get("matched") and i.get("output_dest") == "シルビア"]
                 r["haruna_items"] = [i for i in r["matched_items"] if i.get("matched") and i.get("output_dest") == "ハルナ"]
@@ -282,7 +429,7 @@ def api_confirm():
     # Generate outputs
     try:
         ensure_output_dir()
-        generated = generate_pdfs(results, pdf_name, staff_name, remarks)
+        generated = generate_pdfs(results, pdf_name, staff_name)
         csv_path = results_to_csv(results, pdf_name)
         xlsx_path = results_to_excel(results, pdf_name)
         ne_csv_path = results_to_ne_csv(results, pdf_name)
@@ -464,8 +611,11 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background
 </div>
 
 <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
-    <input type="file" id="fileInput" accept=".pdf" multiple>
-    <p>PDFファイルをドラッグ＆ドロップ、またはクリックして選択</p>
+    <input type="file" id="fileInput" accept=".pdf,.csv" multiple>
+    <p>PDF / CSV（PALTAC・インフォマート）をドラッグ＆ドロップ、またはクリックして選択</p>
+    <div style="margin-top:16px" onclick="event.stopPropagation()">
+        <button onclick="startManualEntry()" style="padding:10px 24px;background:#2E7D32;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">手入力で受注登録</button>
+    </div>
 </div>
 
 <div class="main-area hidden" id="mainArea">
@@ -474,9 +624,10 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background
             <button id="prevBtn" onclick="changePage(-1)" disabled>&lt; 前</button>
             <span id="pageInfo">1 / 1</span>
             <button id="nextBtn" onclick="changePage(1)" disabled>次 &gt;</button>
+            <button onclick="rotateImage()" style="margin-left:12px;padding:4px 10px;background:#666;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px" title="画像を180°回転">↻ 回転</button>
         </div>
         <div class="preview-img">
-            <img id="previewImg" src="" alt="PDF Preview">
+            <img id="previewImg" src="" alt="PDF Preview" style="transition:transform 0.3s">
         </div>
     </div>
     <div class="right-panel" id="rightPanel">
@@ -487,8 +638,6 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background
 <div class="footer-bar hidden" id="footerBar">
     <label>担当者</label>
     <input type="text" id="staffInput" value="伊藤" style="width:80px">
-    <label>備考</label>
-    <input type="text" id="remarksInput" value="" style="width:200px">
     <button class="btn-confirm" id="confirmBtn" onclick="doConfirm()">確定 &amp; PDF生成</button>
 </div>
 
@@ -511,12 +660,20 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background
 let sessionId = null;
 let pageResults = [];
 let currentPage = 0;
+// 商品名→賞味期限のメモリ（セッション中保持、ロット切替時は手動変更可）
+const expiryMemory = {};
+// 商品マスタリスト（プルダウン用）
+let productMaster = [];
 let ddcMaster = [];
 
 // ─── Init: load DDC list ───
-fetch('/api/ddc_list').then(r => r.json()).then(data => {
-    ddcMaster = data;
-    document.getElementById('statusText').textContent = `DDCマスタ: ${data.length}件読込完了`;
+Promise.all([
+    fetch('/api/ddc_list').then(r => r.json()),
+    fetch('/api/product_list').then(r => r.json()),
+]).then(([ddcData, prodData]) => {
+    ddcMaster = ddcData;
+    productMaster = prodData;
+    document.getElementById('statusText').textContent = `DDC: ${ddcData.length}件 / 商品: ${prodData.length}件 読込完了`;
 });
 
 // ─── File Upload ───
@@ -546,18 +703,31 @@ async function handleFiles(files) {
         if (data.error) { alert(data.error); hideLoading(); return; }
 
         sessionId = data.session_id;
-        showLoading(`OCR処理中... (${data.page_count}ページ)`);
 
-        // Run OCR
-        const ocrRes = await fetch('/api/ocr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: sessionId }),
-        });
-        const ocrData = await ocrRes.json();
-        if (ocrData.error) { alert(ocrData.error); hideLoading(); return; }
+        if (data.auto_results) {
+            // PALTAC CSV: OCR不要、直接結果取得
+            showLoading(`PALTAC CSV取込中... (${data.page_count}件)`);
+            const ocrRes = await fetch('/api/ocr', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId }),
+            });
+            const ocrData = await ocrRes.json();
+            if (ocrData.error) { alert(ocrData.error); hideLoading(); return; }
+            pageResults = ocrData.pages;
+        } else {
+            // PDF: OCR処理
+            showLoading(`OCR処理中... (${data.page_count}ページ)`);
+            const ocrRes = await fetch('/api/ocr', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId }),
+            });
+            const ocrData = await ocrRes.json();
+            if (ocrData.error) { alert(ocrData.error); hideLoading(); return; }
+            pageResults = ocrData.pages;
+        }
 
-        pageResults = ocrData.pages;
         currentPage = 0;
         showResults();
         hideLoading();
@@ -580,6 +750,9 @@ function changePage(delta) {
     currentPage += delta;
     if (currentPage < 0) currentPage = 0;
     if (currentPage >= pageResults.length) currentPage = pageResults.length - 1;
+    // ページ切替時に回転リセット
+    imageRotation = 0;
+    document.getElementById('previewImg').style.transform = '';
     renderPage(currentPage);
     updatePageNav();
 }
@@ -592,8 +765,16 @@ function updatePageNav() {
 
 function renderPage(idx) {
     const pr = pageResults[idx];
-    // Preview image
-    document.getElementById('previewImg').src = `/api/page_image/${sessionId}/${pr.page}`;
+    // Preview image (PALTAC CSVの場合はプレビューなし)
+    const previewImg = document.getElementById('previewImg');
+    if (pr.source === 'paltac' || pr.source === 'infomart' || pr.source === 'manual') {
+        previewImg.src = '';
+        previewImg.alt = 'CSV取込（プレビューなし）';
+        previewImg.style.display = 'none';
+    } else {
+        previewImg.style.display = '';
+        previewImg.src = `/api/page_image/${sessionId}/${pr.page}`;
+    }
 
     const panel = document.getElementById('rightPanel');
 
@@ -622,6 +803,11 @@ function renderPage(idx) {
     let itemsRows = '';
     for (let i = 0; i < items.length; i++) {
         const it = items[i];
+        // 記憶済みの賞味期限を自動適用（未入力の場合のみ）
+        const masterName = it.matched ? it.master_name : it.ocr_name;
+        if ((!it.expiry_date || it.expiry_date === '') && masterName && expiryMemory[masterName]) {
+            it.expiry_date = expiryMemory[masterName];
+        }
         if (!it.expiry_date) it.expiry_date = '';
         if (it.double_pack === undefined) it.double_pack = false;
         const cls = it.matched ? 'matched' : 'unmatched';
@@ -629,14 +815,21 @@ function renderPage(idx) {
         const matchBadge = it.matched ? '<span class="badge badge-ok">OK</span>' : '<span class="badge badge-ng">NG</span>';
         const dpChecked = it.double_pack ? 'checked' : '';
         const dpStyle = it.double_pack ? 'background:#E65100;color:#fff;' : 'background:#eee;color:#999;';
+        // 商品プルダウン生成
+        let prodOptions = `<option value="">-- 選択 --</option>`;
+        for (const pm of productMaster) {
+            const sel = (pm.name === name) ? ' selected' : '';
+            prodOptions += `<option value="${pm.name}"${sel}>${pm.name}</option>`;
+        }
         itemsRows += `<tr class="${cls}">
-            <td>${name}</td>
+            <td><select data-page="${idx}" data-item="${i}" onchange="updateProduct(this)" style="font-size:13px;width:100%;padding:3px">${prodOptions}</select></td>
             <td>${it.jan || ''}</td>
             <td><input type="number" value="${it.quantity || 0}" min="0" data-page="${idx}" data-item="${i}" onchange="updateQty(this)" style="width:60px"></td>
             <td><input type="date" value="${it.expiry_date}" data-page="${idx}" data-item="${i}" onchange="updateExpiry(this)" style="width:140px;font-size:14px"></td>
             <td><button onclick="toggleDoublePack(${idx},${i},this)" style="border:none;border-radius:4px;padding:5px 10px;font-size:13px;cursor:pointer;${dpStyle}" id="dpBtn-${idx}-${i}">${it.double_pack ? '二重梱包' : '通常'}</button></td>
             <td>${it.output_dest || ''}</td>
             <td>${matchBadge}</td>
+            <td><button onclick="removeProductRow(${idx},${i})" style="background:#d32f2f;color:#fff;border:none;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:12px">✕</button></td>
         </tr>`;
     }
 
@@ -646,12 +839,16 @@ function renderPage(idx) {
         <div class="field-grid">
             <label>オーダーNO</label>
             <input type="text" value="${ocr.order_no || ''}" data-page="${idx}" data-field="order_no" onchange="editField(this)">
+            <label>TWO受注NO</label>
+            <input type="text" value="${pr.two_order_no || ''}" data-page="${idx}" data-field="two_order_no" onchange="editTwoOrderNo(this)" style="background:#FFF8E1;font-weight:bold">
             <label>納品日</label>
             <input type="date" value="${ocr.delivery_date || ''}" data-page="${idx}" data-field="delivery_date" onchange="editField(this)">
             <label>発注元</label>
             <input type="text" value="${ocr.sender || ''}" readonly style="background:#f5f5f5">
             <label>納品先(OCR)</label>
             <input type="text" value="${ocr.delivery_dest || ''}" readonly style="background:#f5f5f5">
+            <label>備考</label>
+            <input type="text" value="${pr.remarks || ''}" data-page="${idx}" data-field="remarks" onchange="editRemarks(this)" placeholder="この注文の備考">
         </div>
     </div>
     <div class="card">
@@ -673,9 +870,10 @@ function renderPage(idx) {
     <div class="card">
         <h3>商品明細</h3>
         <table class="items-table">
-            <thead><tr><th>商品名</th><th>JAN</th><th>数量(CS)</th><th>賞味期限</th><th>梱包</th><th>出力先</th><th>マッチ</th></tr></thead>
+            <thead><tr><th>商品名</th><th>JAN</th><th>数量(CS)</th><th>賞味期限</th><th>梱包</th><th>出力先</th><th>マッチ</th><th></th></tr></thead>
             <tbody>${itemsRows}</tbody>
         </table>
+        <button onclick="addProductRow(${idx})" style="margin-top:8px;padding:6px 16px;background:#1565C0;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px">＋ 商品追加</button>
     </div>`;
 }
 
@@ -770,10 +968,47 @@ function updateQty(el) {
         if (amtCell) amtCell.textContent = '¥' + item.amount.toLocaleString();
     }
 }
+function editTwoOrderNo(el) {
+    const idx = parseInt(el.dataset.page);
+    pageResults[idx].two_order_no = el.value;
+}
+function editRemarks(el) {
+    const idx = parseInt(el.dataset.page);
+    pageResults[idx].remarks = el.value;
+}
+function updateProduct(el) {
+    const idx = parseInt(el.dataset.page);
+    const itemIdx = parseInt(el.dataset.item);
+    const selectedName = el.value;
+    const item = pageResults[idx].matched_items[itemIdx];
+    // 商品マスタから該当商品の情報を取得して更新
+    const pm = productMaster.find(p => p.name === selectedName);
+    if (pm) {
+        item.matched = true;
+        item.master_name = pm.name;
+        item.jan = pm.jan || '';
+        item.code = pm.code || '';
+        item.output_dest = pm.output_dest || '';
+        item.case_quantity = pm.case_quantity || 0;
+        item.cs_price = pm.cs_price || 0;
+        if (item.quantity && item.cs_price) {
+            item.amount = item.quantity * item.cs_price;
+        }
+        // 賞味期限: メモリから自動適用させるためリセット
+        delete item.expiry_date;
+    }
+    renderPage(idx);
+}
 function updateExpiry(el) {
     const idx = parseInt(el.dataset.page);
     const itemIdx = parseInt(el.dataset.item);
-    pageResults[idx].matched_items[itemIdx].expiry_date = el.value;
+    const item = pageResults[idx].matched_items[itemIdx];
+    item.expiry_date = el.value;
+    // 商品名→賞味期限をメモリに保存（次の注文で自動適用）
+    const name = item.master_name || item.ocr_name;
+    if (name && el.value) {
+        expiryMemory[name] = el.value;
+    }
 }
 function toggleDoublePack(pageIdx, itemIdx, btn) {
     const item = pageResults[pageIdx].matched_items[itemIdx];
@@ -799,8 +1034,15 @@ async function doConfirm() {
         page: pr.page,
         ddc_name: pr._userDdc || pr.ddc_match.name || '',
         order_no: pr.ocr_raw.order_no || '',
+        two_order_no: pr.two_order_no || '',
         delivery_date: pr.ocr_raw.delivery_date || '',
-        items: pr.matched_items.map((it, i) => ({ index: i, quantity: it.quantity, expiry_date: it.expiry_date || '', double_pack: it.double_pack || false })),
+        remarks: pr.remarks || '',
+        items: pr.matched_items.map((it, i) => ({
+            index: i, quantity: it.quantity, expiry_date: it.expiry_date || '', double_pack: it.double_pack || false,
+            master_name: it.master_name || '', jan: it.jan || '', code: it.code || '',
+            output_dest: it.output_dest || '', case_quantity: it.case_quantity || 0,
+            cs_price: it.cs_price || 0, matched: it.matched || false,
+        })),
     }));
 
     try {
@@ -810,7 +1052,7 @@ async function doConfirm() {
             body: JSON.stringify({
                 session_id: sessionId,
                 staff_name: document.getElementById('staffInput').value,
-                remarks: document.getElementById('remarksInput').value,
+                remarks: '',
                 pages: pages,
             }),
         });
@@ -844,9 +1086,13 @@ async function reloadMaster() {
         const data = await res.json();
         if (data.success) {
             document.getElementById('statusText').textContent = data.message;
-            // DDCリストも再取得
-            const ddcRes = await fetch('/api/ddc_list');
+            // DDCリスト・商品リストも再取得
+            const [ddcRes, prodRes] = await Promise.all([
+                fetch('/api/ddc_list'),
+                fetch('/api/product_list'),
+            ]);
             ddcMaster = await ddcRes.json();
+            productMaster = await prodRes.json();
         } else {
             document.getElementById('statusText').textContent = 'マスタ更新失敗';
         }
@@ -858,15 +1104,73 @@ async function reloadMaster() {
 // ─── Reset for next PDF ───
 function resetForNext() {
     sessionId = null;
-    currentPage = 1;
+    pageResults = [];
+    currentPage = 0;
     totalPages = 0;
-    ocrResults = {};
+    // expiryMemory は保持（賞味期限の引継ぎ）
     document.getElementById('outputPanel').classList.add('hidden');
     document.getElementById('outputFiles').innerHTML = '';
-    document.getElementById('ocrResult').innerHTML = '<p style="color:#999">PDFをアップロードしてください</p>';
-    document.getElementById('pageNav').innerHTML = '';
-    document.getElementById('pageView').innerHTML = '';
+    document.getElementById('rightPanel').innerHTML = '';
+    document.getElementById('mainArea').classList.add('hidden');
+    document.getElementById('footerBar').classList.add('hidden');
+    document.getElementById('uploadZone').style.display = '';
     document.getElementById('fileInput').value = '';
+    // 回転リセット
+    imageRotation = 0;
+    const img = document.getElementById('previewImg');
+    if (img) img.style.transform = '';
+}
+
+// ─── Manual entry ───
+async function startManualEntry() {
+    showLoading('手入力モード準備中...');
+    try {
+        const res = await fetch('/api/manual_entry', { method: 'POST' });
+        const data = await res.json();
+        sessionId = data.session_id;
+        const ocrRes = await fetch('/api/ocr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId }),
+        });
+        const ocrData = await ocrRes.json();
+        pageResults = ocrData.pages;
+        currentPage = 0;
+        showResults();
+        hideLoading();
+    } catch (err) {
+        alert('エラー: ' + err.message);
+        hideLoading();
+    }
+}
+function addProductRow(pageIdx) {
+    const pr = pageResults[pageIdx];
+    pr.matched_items.push({
+        matched: false,
+        ocr_name: '',
+        master_name: '',
+        jan: '',
+        code: '',
+        quantity: 0,
+        cs_price: 0,
+        amount: 0,
+        output_dest: '',
+        case_quantity: 0,
+        expiry_date: '',
+        double_pack: false,
+    });
+    renderPage(pageIdx);
+}
+function removeProductRow(pageIdx, itemIdx) {
+    pageResults[pageIdx].matched_items.splice(itemIdx, 1);
+    renderPage(pageIdx);
+}
+
+// ─── Image rotation ───
+let imageRotation = 0;
+function rotateImage() {
+    imageRotation = (imageRotation + 180) % 360;
+    document.getElementById('previewImg').style.transform = `rotate(${imageRotation}deg)`;
 }
 
 // ─── Loading overlay ───

@@ -33,6 +33,253 @@ def ensure_output_dir():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
+def parse_infomart_csv(csv_bytes, filename="infomart.csv"):
+    """インフォマートCSVを読み込み、OCR結果と同じresults形式に変換する。
+
+    フォーマット:
+    - Row 0: H行（ヘッダー、日付）
+    - Row 1: カラム名（［データ区分］等）
+    - Row 2+: D行（データ）
+    - 最終行: F行（フッター）
+    - 伝票Noでグループ化
+    """
+    import unicodedata
+    from ocr_module import match_product, match_ddc, load_product_master, load_ddc_master
+
+    pm = load_product_master()
+    ddc_master = load_ddc_master()
+
+    text = None
+    for enc in ['shift-jis', 'cp932', 'utf-8-sig', 'utf-8']:
+        try:
+            text = csv_bytes.decode(enc)
+            break
+        except (UnicodeDecodeError, AttributeError):
+            continue
+    if text is None:
+        return []
+
+    import io
+    reader = csv.reader(io.StringIO(text))
+    all_rows = list(reader)
+
+    # ヘッダー行（Row 1）とデータ行（D行）を抽出
+    if len(all_rows) < 3:
+        return []
+    headers = [h.strip('［］') for h in all_rows[1]]
+    data_rows = []
+    for r in all_rows[2:]:
+        if r and r[0].strip() == 'D':
+            row_dict = {}
+            for j, h in enumerate(headers):
+                row_dict[h] = r[j] if j < len(r) else ''
+            data_rows.append(row_dict)
+
+    if not data_rows:
+        return []
+
+    # 伝票Noでグループ化
+    from collections import OrderedDict
+    slip_groups = OrderedDict()
+    for r in data_rows:
+        slip_no = r.get('伝票No', '').strip()
+        if slip_no not in slip_groups:
+            slip_groups[slip_no] = []
+        slip_groups[slip_no].append(r)
+
+    results = []
+    page = 0
+    for slip_no, group_rows in slip_groups.items():
+        page += 1
+        first = group_rows[0]
+
+        # 取引先名・納品場所から納品先を判定
+        dest_name = first.get('納品場所名', '').strip()
+        if not dest_name:
+            dest_name = first.get('取引先名', '').strip()
+        dest_name = unicodedata.normalize('NFKC', dest_name)
+        dest_address = unicodedata.normalize('NFKC', first.get('納品場所 住所', '').strip())
+        sender = unicodedata.normalize('NFKC', first.get('取引先名', '').strip())
+        delivery_date = first.get('納品日', '').strip()
+
+        # DDCマッチング
+        ddc_match = match_ddc(dest_name, ddc_master, sender=sender)
+        # 住所をDDCマッチ結果に補完（マスタにない場合）
+        if ddc_match.get("matched") and not ddc_match.get("address") and dest_address:
+            ddc_match["address"] = dest_address
+
+        # 商品マッチング
+        matched_items = []
+        for r in group_rows:
+            product_code = r.get('自社管理商品コード', '').strip()
+            product_name = unicodedata.normalize('NFKC', r.get('商品名', '').strip())
+            try:
+                qty = float(r.get('数量', '0').strip() or '0')
+                qty = int(qty) if qty == int(qty) else qty
+            except ValueError:
+                qty = 0
+
+            ocr_item = {
+                "jan_code": "",
+                "product_code": product_code,
+                "product_name": product_name,
+                "quantity_cs": qty,
+            }
+            match = match_product(ocr_item, pm)
+            if match:
+                matched_items.append(match)
+            else:
+                matched_items.append({
+                    "matched": False,
+                    "ocr_name": product_name,
+                    "jan": "",
+                    "code": product_code,
+                    "quantity": qty,
+                })
+
+        sylvia_items = [i for i in matched_items if i.get("matched") and i.get("output_dest") == "シルビア"]
+        haruna_items = [i for i in matched_items if i.get("matched") and i.get("output_dest") == "ハルナ"]
+
+        results.append({
+            "page": page,
+            "source": "infomart",
+            "ocr_raw": {
+                "order_no": slip_no,
+                "delivery_date": delivery_date.replace("/", "-"),
+                "delivery_dest": dest_name,
+                "sender": sender,
+                "notes": "",
+                "items": [],
+            },
+            "matched_items": matched_items,
+            "ddc_match": ddc_match,
+            "sylvia_items": sylvia_items,
+            "haruna_items": haruna_items,
+        })
+
+    return results
+
+
+def parse_paltac_csv(csv_bytes, filename="paltac.csv"):
+    """PALTAC WebEDI CSVを読み込み、OCR結果と同じresults形式に変換する。
+
+    - 届先区分「発注」のみ取り込み（返品は除外）
+    - 同一伝票番号の複数行を1ページにまとめる
+    - JANコードで商品マッチング
+    - 届先名でDDCマッチング
+    """
+    import unicodedata
+    from ocr_module import match_product, match_ddc, load_product_master, load_ddc_master, normalize
+
+    pm = load_product_master()
+    ddc_master = load_ddc_master()
+
+    # CSVを読み込み（Shift-JIS）
+    text = None
+    for enc in ['shift-jis', 'cp932', 'utf-8-sig', 'utf-8']:
+        try:
+            text = csv_bytes.decode(enc)
+            break
+        except (UnicodeDecodeError, AttributeError):
+            continue
+    if text is None:
+        return []
+
+    import io
+    reader = csv.DictReader(io.StringIO(text))
+    rows = list(reader)
+
+    # 届先区分「発注」のみフィルタ
+    order_rows = [r for r in rows if unicodedata.normalize('NFKC', r.get('届先区分', '').strip()) == '発注']
+    if not order_rows:
+        return []
+
+    # 伝票番号でグループ化
+    from collections import OrderedDict
+    slip_groups = OrderedDict()
+    for r in order_rows:
+        slip_no = r.get('伝票番号', '').strip()
+        if slip_no not in slip_groups:
+            slip_groups[slip_no] = []
+        slip_groups[slip_no].append(r)
+
+    results = []
+    page = 0
+    for slip_no, group_rows in slip_groups.items():
+        page += 1
+        first = group_rows[0]
+
+        # 届先名を正規化
+        dest_name = unicodedata.normalize('NFKC', first.get('届先名', '').strip())
+        sender = unicodedata.normalize('NFKC', first.get('発注元名', '').strip())
+        order_date = first.get('発注日', '').strip()
+        delivery_date = first.get('着荷指定日', '').strip()
+
+        # DDCマッチング
+        ddc_match = match_ddc(dest_name, ddc_master, sender=sender)
+
+        # 商品マッチング
+        matched_items = []
+        for r in group_rows:
+            jan = r.get('商品ｺｰﾄﾞ', '').strip()
+            product_name = unicodedata.normalize('NFKC', r.get('商品名', '').strip())
+            try:
+                cs_qty = int(r.get('ｹｰｽ数', '0').strip() or '0')
+            except ValueError:
+                cs_qty = 0
+            try:
+                bara_qty = int(r.get('ﾊﾞﾗ数', '0').strip() or '0')
+            except ValueError:
+                bara_qty = 0
+            try:
+                irisuu = int(r.get('入数', '0').strip() or '0')
+            except ValueError:
+                irisuu = 0
+
+            # CS数が0でバラ数がある場合、CS換算
+            if cs_qty == 0 and bara_qty > 0 and irisuu > 0:
+                cs_qty = bara_qty / irisuu  # 端数はそのまま
+
+            ocr_item = {
+                "jan_code": jan,
+                "product_name": product_name,
+                "quantity_cs": cs_qty,
+            }
+            match = match_product(ocr_item, pm)
+            if match:
+                matched_items.append(match)
+            else:
+                matched_items.append({
+                    "matched": False,
+                    "ocr_name": product_name,
+                    "jan": jan,
+                    "quantity": int(cs_qty) if cs_qty == int(cs_qty) else cs_qty,
+                })
+
+        # 出力先で分類
+        sylvia_items = [i for i in matched_items if i.get("matched") and i.get("output_dest") == "シルビア"]
+        haruna_items = [i for i in matched_items if i.get("matched") and i.get("output_dest") == "ハルナ"]
+
+        results.append({
+            "page": page,
+            "source": "paltac",
+            "ocr_raw": {
+                "order_no": slip_no,
+                "delivery_date": delivery_date.replace("/", "-"),
+                "delivery_dest": dest_name,
+                "sender": sender,
+                "notes": "",
+                "items": [],
+            },
+            "matched_items": matched_items,
+            "ddc_match": ddc_match,
+            "sylvia_items": sylvia_items,
+            "haruna_items": haruna_items,
+        })
+
+    return results
+
+
 def results_to_csv(results, pdf_name):
     """Write OCR+matching results to CSV"""
     ensure_output_dir()
@@ -380,25 +627,25 @@ def _select_shipping_method(product_name, total_cs, dest_pref):
         mapping = _PREF_TO_BTOB_CARRIER_140 if size == "140" else _PREF_TO_BTOB_CARRIER_120
         carrier = mapping.get(pref_clean, "福山通運")
         if carrier == "福山通運":
-            return "福山通運"
-        return f"ヤマト(発払い)B2v6"
+            return ("福山通運", "55", "130")
+        return ("ヤマト(発払い)B2v6", "20", "0812")
 
     if "SNACK" in pn or "サブレ" in pn or "トリュフ" in pn or "ガーリック" in pn or "ガトーショコラ" in pn:
         if total_cs < 5:
-            return "佐川急便"
+            return ("佐川急便", "10", "01")
         return btob_best("120")
     elif "GUMMY" in pn or "グミ" in pn:
         if total_cs <= 1:
-            return "佐川急便"
+            return ("佐川急便", "10", "01")
         return btob_best("120")
     elif "ENERGY" in pn or "エナジー" in pn:
         if total_cs <= 1:
-            return "佐川急便"
+            return ("佐川急便", "10", "01")
         return btob_best("140")
     elif "WATER" in pn or "ウォーター" in pn or "CERAMIDE" in pn or "セラミド" in pn:
         return btob_best("120")
     else:
-        return "ヤマト(発払い)B2v6"
+        return ("ヤマト(発払い)B2v6", "20", "0812")
 
 
 def _classify_product_group(product_name):
@@ -487,6 +734,7 @@ def results_to_coola_csv(results, pdf_name):
         ddc = page_result.get("ddc_match", {})
 
         order_no = ocr.get("order_no", "")
+        two_order_no = page_result.get("two_order_no", "")
         delivery_date = ocr.get("delivery_date", "")
 
         # 納品先情報
@@ -570,9 +818,9 @@ def results_to_coola_csv(results, pdf_name):
 
                 # 配送方法: Snackは混載合計CSで判定、他は個別CS
                 if gkey == "S":
-                    shipping_method = _select_shipping_method(product_name, total_cs_in_group, pref)
+                    shipping_method, carrier_id, time_code = _select_shipping_method(product_name, total_cs_in_group, pref)
                 else:
-                    shipping_method = _select_shipping_method(product_name, qty_cs_int, pref)
+                    shipping_method, carrier_id, time_code = _select_shipping_method(product_name, qty_cs_int, pref)
 
                 row = {h: "" for h in COOLA_HEADERS}
                 row.update({
@@ -589,10 +837,10 @@ def results_to_coola_csv(results, pdf_name):
                     "配送先電話番号": dest_tel,
                     "出荷備考": remarks,
                     "出荷日": "",
-                    "配送会社id": "",
+                    "配送会社id": carrier_id,
                     "配送指定日": f"{delivery_date} 00:00:00" if delivery_date else "",
-                    "配送時間帯": "午前中",
-                    "顧客id": "",
+                    "配送時間帯": time_code,
+                    "顧客id": two_order_no,
                     "税種区分": "1",
                     "送料": 0,
                     "代引手数料": 0,
@@ -798,7 +1046,7 @@ def results_to_excel(results, pdf_name):
     return xlsx_path
 
 
-def generate_pdfs(results, pdf_name, staff_name="伊藤", remarks=""):
+def generate_pdfs(results, pdf_name, staff_name="伊藤"):
     """Generate Sylvia and/or Haruna order PDFs from processing results"""
     ensure_output_dir()
     generated = []
@@ -811,6 +1059,7 @@ def generate_pdfs(results, pdf_name, staff_name="伊藤", remarks=""):
         ddc = page_result["ddc_match"]
         sylvia_items = page_result["sylvia_items"]
         haruna_items = page_result["haruna_items"]
+        remarks = page_result.get("remarks", "")
         order_no = ocr.get("order_no", "")
         dest_name = ddc.get("name", ocr.get("delivery_dest", "unknown"))
         page_num = page_result["page"]
