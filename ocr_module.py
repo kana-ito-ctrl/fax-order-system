@@ -116,11 +116,18 @@ def _auto_rotate_image(img):
     return img.rotate(-90, expand=True)
 
 
-def pdf_to_images(pdf_bytes, dpi=300):
-    """Convert PDF to list of per-page base64 PNG images (with auto-rotation)"""
+def pdf_to_images(pdf_bytes, dpi=150):
+    """Convert PDF to list of per-page base64 JPEG images (with auto-rotation).
+
+    メモリ最適化:
+    - DPI=150（OCR精度を維持しつつメモリ削減、DPI=200比で56%）
+    - JPEG圧縮（PNG比で60-70%サイズ削減）
+    - 各ページ処理後にメモリ解放
+    """
     import fitz  # PyMuPDF
     from PIL import Image
     import io
+    import gc
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     images = []
     for page_num in range(len(doc)):
@@ -128,11 +135,19 @@ def pdf_to_images(pdf_bytes, dpi=300):
         mat = fitz.Matrix(dpi / 72, dpi / 72)
         pix = page.get_pixmap(matrix=mat)
         img = Image.open(io.BytesIO(pix.tobytes("png")))
+        # pixmapを即座に解放
+        del pix
         img = _auto_rotate_image(img)
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        # JPEG圧縮でサイズ削減（品質85: OCR精度に影響なし）
+        if img.mode == 'RGBA':
+            img = img.convert('RGB')
+        img.save(buf, format="JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
         images.append({"page": page_num + 1, "base64": b64})
+        # メモリ解放
+        del img, buf
+        gc.collect()
     doc.close()
     return images
 
@@ -230,7 +245,7 @@ def ocr_fax_page(image_b64, model="claude-sonnet-4-6"):
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "image/png",
+                            "media_type": "image/jpeg",
                             "data": image_b64
                         }
                     },
@@ -302,7 +317,14 @@ def match_product(ocr_item, product_master):
     if jan and len(jan) == 13:
         m = product_master[product_master["JANコード"] == jan]
         if len(m) > 0:
-            return _product_row_to_dict(m.iloc[0], ocr_item)
+            result = _product_row_to_dict(m.iloc[0], ocr_item)
+            # 2Gummy（JAN:4589570801331）→ アテンションシールありを優先
+            if jan == "4589570801331":
+                alt = product_master[product_master["商品コード"] == "1005038A0440"]
+                if len(alt) > 0:
+                    result = _product_row_to_dict(alt.iloc[0], ocr_item)
+                    result["jan"] = jan  # JANは元のまま保持
+            return result
 
     # 2. Product name exact match (normalized)
     if ocr_name:
@@ -574,13 +596,28 @@ def _ddc_row_to_dict(row):
     name = safe(row.get("納品先名", ""))
 
     # haruna_conditionsから入荷時間・バース予約・パレット条件を取得
-    # 完全一致 → 部分一致（DDCマスタの名前が長い場合に対応）
+    # 完全一致 → 部分一致 → DC名ゆれ吸収（SDC/DDC/RDC等）
+    import re
     from supabase_client import load_haruna_conditions
     haruna = load_haruna_conditions()
     hc = haruna.get(name, None)
     if hc is None and name:
+        # 部分一致
         for hname, hdata in haruna.items():
             if hname in name or name in hname:
+                hc = hdata
+                break
+    if hc is None and name:
+        # DC名ゆれ + 会社名正規化で比較
+        def _norm_haruna(s):
+            t = re.sub(r'[A-Z]DC', '_DC', s)  # SDC/DDC/RDC統一
+            t = re.sub(r'株式会社|（株）|\(株\)|㈱', '', t)  # 会社名表記ゆれ
+            t = re.sub(r'\s+', ' ', t).strip()
+            return t
+        name_norm = _norm_haruna(name)
+        for hname, hdata in haruna.items():
+            hname_norm = _norm_haruna(hname)
+            if hname_norm in name_norm or name_norm in hname_norm:
                 hc = hdata
                 break
     if hc is None:

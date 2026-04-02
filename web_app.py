@@ -162,11 +162,15 @@ def api_product_list():
         case_qty = int(row.get("入数", 0) or 0)
         output_dest = str(row.get("出力先", "")).strip()
         cs_price = float(row.get("CS単価", 0) or 0)
+        spec = str(row.get("規格", "")).strip()
+        pack = str(row.get("配送荷姿", "")).strip()
+        unit_price = float(row.get("1袋単価", 0) or 0)
         if name:
             items.append({
                 "name": name, "jan": jan, "code": code,
                 "case_quantity": case_qty, "output_dest": output_dest,
-                "cs_price": cs_price,
+                "cs_price": cs_price, "spec": spec, "pack": pack,
+                "unit_price": unit_price,
             })
     return jsonify(items)
 
@@ -229,7 +233,7 @@ def api_upload():
     session_id = str(uuid.uuid4())[:8]
 
     # Convert to page images
-    pages = pdf_to_images(pdf_bytes, dpi=200)
+    pages = pdf_to_images(pdf_bytes, dpi=150)
 
     sessions[session_id] = {
         "pdf_bytes": pdf_bytes,
@@ -255,7 +259,7 @@ def api_page_image(session_id, page):
         if p["page"] == page:
             img_bytes = base64.b64decode(p["base64"])
             from io import BytesIO
-            return send_file(BytesIO(img_bytes), mimetype="image/png")
+            return send_file(BytesIO(img_bytes), mimetype="image/jpeg")
     return "Page not found", 404
 
 
@@ -400,6 +404,9 @@ def api_confirm():
                             mi["output_dest"] = ui.get("output_dest", mi.get("output_dest", ""))
                             mi["case_quantity"] = ui.get("case_quantity", mi.get("case_quantity", 0))
                             mi["cs_price"] = ui.get("cs_price", mi.get("cs_price", 0))
+                            mi["spec"] = ui.get("spec", mi.get("spec", ""))
+                            mi["pack"] = ui.get("pack", mi.get("pack", ""))
+                            mi["unit_price"] = ui.get("unit_price", mi.get("unit_price", 0))
                         if "quantity" in ui:
                             mi["quantity"] = ui["quantity"]
                             if mi.get("cs_price"):
@@ -422,6 +429,26 @@ def api_confirm():
                 # Update remarks (per page)
                 if "remarks" in up:
                     r["remarks"] = up["remarks"]
+                # Update warehouse_direct flag
+                if "warehouse_direct" in up:
+                    r["warehouse_direct"] = up["warehouse_direct"]
+                    if up["warehouse_direct"]:
+                        r["ddc_match"] = {
+                            "matched": True,
+                            "name": "株式会社ベルーナ・ジーエフ・ロジスティクス",
+                            "postal": "3620066",
+                            "address": "埼玉県上尾市領家丸山30-1",
+                            "tel": "048-725-0179",
+                            "fax": "",
+                            "time": "",
+                            "berse": "",
+                            "palette": "",
+                            "jpr": "",
+                            "method": "",
+                            "match_score": 1.0,
+                            "low_confidence": False,
+                            "candidates": [],
+                        }
                 # Re-split sylvia/haruna
                 r["sylvia_items"] = [i for i in r["matched_items"] if i.get("matched") and i.get("output_dest") == "シルビア"]
                 r["haruna_items"] = [i for i in r["matched_items"] if i.get("matched") and i.get("output_dest") == "ハルナ"]
@@ -432,8 +459,10 @@ def api_confirm():
         generated = generate_pdfs(results, pdf_name, staff_name)
         csv_path = results_to_csv(results, pdf_name)
         xlsx_path = results_to_excel(results, pdf_name)
-        ne_csv_path = results_to_ne_csv(results, pdf_name)
-        coola_csv_path = results_to_coola_csv(results, pdf_name)
+        # 自社倉庫向けを除外してCSV生成
+        csv_results = [r for r in results if not r.get("warehouse_direct")]
+        ne_csv_path = results_to_ne_csv(csv_results, pdf_name) if csv_results else None
+        coola_csv_path = results_to_coola_csv(csv_results, pdf_name) if csv_results else None
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -849,6 +878,11 @@ function renderPage(idx) {
             <input type="text" value="${ocr.delivery_dest || ''}" readonly style="background:#f5f5f5">
             <label>備考</label>
             <input type="text" value="${pr.remarks || ''}" data-page="${idx}" data-field="remarks" onchange="editRemarks(this)" placeholder="この注文の備考">
+            <label>自社倉庫向け</label>
+            <div style="display:flex;align-items:center;gap:8px">
+                <input type="checkbox" id="warehouseChk-${idx}" ${pr.warehouse_direct ? 'checked' : ''} onchange="toggleWarehouse(${idx}, this)" style="width:20px;height:20px">
+                <span style="font-size:13px;color:#666">${pr.warehouse_direct ? 'ベルーナ宛（CSV出力なし）' : 'チェックでベルーナ宛に設定'}</span>
+            </div>
         </div>
     </div>
     <div class="card">
@@ -976,6 +1010,26 @@ function editRemarks(el) {
     const idx = parseInt(el.dataset.page);
     pageResults[idx].remarks = el.value;
 }
+function toggleWarehouse(pageIdx, chk) {
+    const pr = pageResults[pageIdx];
+    pr.warehouse_direct = chk.checked;
+    if (chk.checked) {
+        // ベルーナの納品先情報を自動設定
+        pr._userDdc = '株式会社ベルーナ・ジーエフ・ロジスティクス';
+        pr.ddc_match = {
+            matched: true,
+            name: '株式会社ベルーナ・ジーエフ・ロジスティクス',
+            postal: '3620066',
+            address: '埼玉県上尾市領家丸山30-1',
+            tel: '048-725-0179',
+            fax: '',
+            match_score: 1.0,
+            low_confidence: false,
+            candidates: [],
+        };
+    }
+    renderPage(pageIdx);
+}
 function updateProduct(el) {
     const idx = parseInt(el.dataset.page);
     const itemIdx = parseInt(el.dataset.item);
@@ -991,6 +1045,9 @@ function updateProduct(el) {
         item.output_dest = pm.output_dest || '';
         item.case_quantity = pm.case_quantity || 0;
         item.cs_price = pm.cs_price || 0;
+        item.spec = pm.spec || '';
+        item.pack = pm.pack || '';
+        item.unit_price = pm.unit_price || 0;
         if (item.quantity && item.cs_price) {
             item.amount = item.quantity * item.cs_price;
         }
@@ -1037,11 +1094,13 @@ async function doConfirm() {
         two_order_no: pr.two_order_no || '',
         delivery_date: pr.ocr_raw.delivery_date || '',
         remarks: pr.remarks || '',
+        warehouse_direct: pr.warehouse_direct || false,
         items: pr.matched_items.map((it, i) => ({
             index: i, quantity: it.quantity, expiry_date: it.expiry_date || '', double_pack: it.double_pack || false,
             master_name: it.master_name || '', jan: it.jan || '', code: it.code || '',
             output_dest: it.output_dest || '', case_quantity: it.case_quantity || 0,
-            cs_price: it.cs_price || 0, matched: it.matched || false,
+            cs_price: it.cs_price || 0, spec: it.spec || '', pack: it.pack || '',
+            unit_price: it.unit_price || 0, matched: it.matched || false,
         })),
     }));
 
