@@ -175,6 +175,72 @@ def api_product_list():
     return jsonify(items)
 
 
+@app.route("/api/upload_multi_csv", methods=["POST"])
+def api_upload_multi_csv():
+    """複数のCSVファイルを一括アップロードして1セッションにまとめる"""
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "ファイルが選択されていません"}), 400
+
+    all_results = []
+    filenames = []
+    sources_used = set()
+
+    for f in files:
+        fname = f.filename.lower()
+        if not fname.endswith(".csv"):
+            continue
+
+        csv_bytes = f.read()
+
+        # フォーマット判定
+        try:
+            first_line = csv_bytes.decode('shift-jis', errors='replace').split('\n')[0]
+        except Exception:
+            first_line = ""
+
+        if first_line.startswith('"H"') or first_line.startswith('H,'):
+            source = "infomart"
+            results = parse_infomart_csv(csv_bytes, f.filename)
+        else:
+            source = "paltac"
+            results = parse_paltac_csv(csv_bytes, f.filename)
+
+        if results:
+            sources_used.add(source)
+            filenames.append(f.filename)
+            # ページ番号を全体で連番化
+            for r in results:
+                r["page"] = len(all_results) + 1
+                r["two_order_no"] = generate_two_order_no()
+                r["source_file"] = f.filename
+                all_results.append(r)
+
+    if not all_results:
+        return jsonify({"error": "発注データが見つかりません"}), 400
+
+    session_id = str(uuid.uuid4())[:8]
+    # 複数フォーマット混在時はpaltac扱い（OCRスキップさえできればOK）
+    main_source = "infomart" if sources_used == {"infomart"} else "paltac"
+    combined_name = f"combined_{len(filenames)}files.csv"
+
+    sessions[session_id] = {
+        "pdf_bytes": None,
+        "pdf_name": combined_name,
+        "pages": [],
+        "results": all_results,
+        "source": main_source,
+    }
+    return jsonify({
+        "session_id": session_id,
+        "filename": combined_name,
+        "page_count": len(all_results),
+        "source": main_source,
+        "auto_results": True,
+        "file_count": len(filenames),
+    })
+
+
 @app.route("/api/upload", methods=["POST"])
 def api_upload():
     """Upload PDF or PALTAC CSV"""
@@ -426,6 +492,9 @@ def api_confirm():
                 # Update TWO受注NO
                 if up.get("two_order_no"):
                     r["two_order_no"] = up["two_order_no"]
+                # オーダーNOが空の場合、TWO受注NOを補完
+                if not r["ocr_raw"].get("order_no"):
+                    r["ocr_raw"]["order_no"] = r.get("two_order_no", "")
                 # Update remarks (per page)
                 if "remarks" in up:
                     r["remarks"] = up["remarks"]
@@ -559,7 +628,11 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background
 
 .card {
     background: white; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    position: relative;
 }
+/* DDC検索カードはドロップダウンが他カードの上に被さるよう前面に */
+.card.ddc-card { z-index: 50; }
+.card.ddc-card.has-dropdown-open { z-index: 1000; }
 .card h3 { font-size: 17px; color: #2F5496; margin-bottom: 10px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; }
 
 .field-grid { display: grid; grid-template-columns: 100px 1fr; gap: 6px 12px; align-items: center; }
@@ -641,7 +714,7 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background
 
 <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
     <input type="file" id="fileInput" accept=".pdf,.csv" multiple>
-    <p>PDF / CSV（PALTAC・インフォマート）をドラッグ＆ドロップ、またはクリックして選択</p>
+    <p>PDF / CSV（PALTAC・インフォマート）をドラッグ＆ドロップ、またはクリックして選択<br><span style="font-size:13px;color:#999">※ 複数CSVを同時選択すると1セッションにまとめて取込</span></p>
     <div style="margin-top:16px" onclick="event.stopPropagation()">
         <button onclick="startManualEntry()" style="padding:10px 24px;background:#2E7D32;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">手入力で受注登録</button>
     </div>
@@ -719,23 +792,33 @@ uploadZone.addEventListener('drop', e => {
 fileInput.addEventListener('change', () => { if (fileInput.files.length > 0) handleFiles(fileInput.files); });
 
 async function handleFiles(files) {
-    // Process first file for now
-    const file = files[0];
-    showLoading(`アップロード中: ${file.name}`);
-
-    const form = new FormData();
-    form.append('file', file);
+    const fileArr = Array.from(files);
+    const allCsv = fileArr.length > 1 && fileArr.every(f => f.name.toLowerCase().endsWith('.csv'));
 
     try {
-        const res = await fetch('/api/upload', { method: 'POST', body: form });
-        const data = await res.json();
+        let data;
+        if (allCsv) {
+            // 複数CSV一括
+            showLoading(`複数CSV一括アップロード中... (${fileArr.length}ファイル)`);
+            const form = new FormData();
+            for (const f of fileArr) form.append('files', f);
+            const res = await fetch('/api/upload_multi_csv', { method: 'POST', body: form });
+            data = await res.json();
+        } else {
+            // 単体ファイル
+            const file = fileArr[0];
+            showLoading(`アップロード中: ${file.name}`);
+            const form = new FormData();
+            form.append('file', file);
+            const res = await fetch('/api/upload', { method: 'POST', body: form });
+            data = await res.json();
+        }
         if (data.error) { alert(data.error); hideLoading(); return; }
 
         sessionId = data.session_id;
 
         if (data.auto_results) {
-            // PALTAC CSV: OCR不要、直接結果取得
-            showLoading(`PALTAC CSV取込中... (${data.page_count}件)`);
+            showLoading(`CSV取込中... (${data.page_count}件)`);
             const ocrRes = await fetch('/api/ocr', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -745,7 +828,6 @@ async function handleFiles(files) {
             if (ocrData.error) { alert(ocrData.error); hideLoading(); return; }
             pageResults = ocrData.pages;
         } else {
-            // PDF: OCR処理
             showLoading(`OCR処理中... (${data.page_count}ページ)`);
             const ocrRes = await fetch('/api/ocr', {
                 method: 'POST',
@@ -867,7 +949,7 @@ function renderPage(idx) {
         <h3>注文情報 <span class="badge ${badgeClass}" id="ddcBadge-${idx}">${status}</span></h3>
         <div class="field-grid">
             <label>オーダーNO</label>
-            <input type="text" value="${ocr.order_no || ''}" data-page="${idx}" data-field="order_no" onchange="editField(this)">
+            <input type="text" value="${ocr.order_no || pr.two_order_no || ''}" data-page="${idx}" data-field="order_no" onchange="editField(this)">
             <label>TWO受注NO</label>
             <input type="text" value="${pr.two_order_no || ''}" data-page="${idx}" data-field="two_order_no" onchange="editTwoOrderNo(this)" style="background:#FFF8E1;font-weight:bold">
             <label>納品日</label>
@@ -885,7 +967,7 @@ function renderPage(idx) {
             </div>
         </div>
     </div>
-    <div class="card">
+    <div class="card ddc-card" id="ddcCard-${idx}">
         <h3>納品先(DDC) マッチング</h3>
         <div class="ddc-search-wrap">
             <input type="text" id="ddcSearch-${idx}" value="${ddc.name || ''}"
@@ -920,7 +1002,12 @@ function filterDdc(pageIdx, query) {
 
 function _filterDdc(pageIdx, query) {
     const dd = document.getElementById(`ddcDropdown-${pageIdx}`);
-    if (!query || query.length < 1) { dd.classList.remove('show'); return; }
+    const card = document.getElementById(`ddcCard-${pageIdx}`);
+    if (!query || query.length < 1) {
+        dd.classList.remove('show');
+        if (card) card.classList.remove('has-dropdown-open');
+        return;
+    }
 
     const q = query.toLowerCase();
     const matches = ddcMaster.filter(d =>
@@ -930,16 +1017,25 @@ function _filterDdc(pageIdx, query) {
     if (matches.length === 0) {
         dd.innerHTML = '<div class="ddc-item" style="color:#999">該当なし</div>';
         dd.classList.add('show');
+        if (card) card.classList.add('has-dropdown-open');
         return;
     }
 
-    dd.innerHTML = matches.map(d => `
-        <div class="ddc-item" onclick="selectDdc(${pageIdx}, '${d.name.replace(/'/g, "\\'")}')">
+    dd.innerHTML = matches.map((d, i) => `
+        <div class="ddc-item" data-idx="${i}">
             <div class="ddc-name">${highlightMatch(d.name, q)}</div>
             <div class="ddc-addr">${d.address}</div>
         </div>
     `).join('');
+    // クリックハンドラを直接バインド（特殊文字エスケープの問題を回避）
+    dd.querySelectorAll('.ddc-item[data-idx]').forEach((el, i) => {
+        el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            selectDdc(pageIdx, matches[i].name);
+        });
+    });
     dd.classList.add('show');
+    if (card) card.classList.add('has-dropdown-open');
 }
 
 function highlightMatch(text, query) {
@@ -951,8 +1047,10 @@ function highlightMatch(text, query) {
 function selectDdc(pageIdx, name) {
     const input = document.getElementById(`ddcSearch-${pageIdx}`);
     const dd = document.getElementById(`ddcDropdown-${pageIdx}`);
+    const card = document.getElementById(`ddcCard-${pageIdx}`);
     input.value = name;
     dd.classList.remove('show');
+    if (card) card.classList.remove('has-dropdown-open');
 
     // Store selection in pageResults
     const entry = ddcMaster.find(d => d.name === name);
@@ -980,6 +1078,7 @@ function selectCandidate(pageIdx, name) {
 document.addEventListener('click', e => {
     if (!e.target.closest('.ddc-search-wrap')) {
         document.querySelectorAll('.ddc-dropdown').forEach(d => d.classList.remove('show'));
+        document.querySelectorAll('.ddc-card.has-dropdown-open').forEach(c => c.classList.remove('has-dropdown-open'));
     }
 });
 

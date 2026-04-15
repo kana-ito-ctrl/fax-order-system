@@ -224,19 +224,23 @@ def load_torihikisaki_master_from_supabase() -> pd.DataFrame | None:
     for key, val in haruna.items():
         haruna_normalized[_norm_key(key)] = val
 
-    seen: set = set()
     records = []
     for r in rows:
         nohinsaki = (r.get("nohinsaki_name") or "").replace('\xa0', ' ').replace('\u3000', ' ').strip()
-        if not nohinsaki or nohinsaki in seen:
+        nohinsaki_code = (r.get("nohinsaki_code") or "").strip()
+        if not nohinsaki:
             continue
-        seen.add(nohinsaki)
         torihikisaki_code = r.get("torihikisaki_code", "")
         torihikisaki_name = torihikisaki_map.get(torihikisaki_code, "")
         hc = haruna_normalized.get(_norm_key(nohinsaki), {})
+        # 表示名: 「納品先名 [コード] 住所」で区別しやすく
+        jusho = (r.get("jusho") or "").strip()
+        display_name = f"{nohinsaki} [{nohinsaki_code}]" if nohinsaki_code else nohinsaki
+        if jusho:
+            display_name += f" / {jusho[:30]}"
         records.append({
-            "納品先名":   nohinsaki,
-            "納品先コード": (r.get("nohinsaki_code") or ""),
+            "納品先名":   display_name,
+            "納品先コード": nohinsaki_code,
             "取引先名":   torihikisaki_name,
             "取引先コード": torihikisaki_code,
             "郵便番号":   (r.get("yubin_bango") or ""),

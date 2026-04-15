@@ -593,7 +593,11 @@ def _ddc_row_to_dict(row):
         s = str(val).strip() if val is not None else ""
         return "" if s.lower() in ("nan", "none", "null") else s
 
-    name = safe(row.get("納品先名", ""))
+    raw_name = safe(row.get("納品先名", ""))
+    # 表示名から「[コード] / 住所...」を除去して純粋な名前に戻す
+    import re
+    name = re.sub(r'\s*\[[^\]]*\]\s*/\s*.*$', '', raw_name)
+    name = re.sub(r'\s*\[[^\]]*\]\s*$', '', name).strip()
 
     # haruna_conditionsから入荷時間・バース予約・パレット条件を取得
     # 完全一致 → 部分一致 → DC名ゆれ吸収（SDC/DDC/RDC等）
@@ -623,9 +627,15 @@ def _ddc_row_to_dict(row):
     if hc is None:
         hc = {}
 
+    # haruna_conditions.notes が "pdf:表示名" 形式の場合、PDF上の納品先名を上書き
+    pdf_name_override = ""
+    hc_notes = hc.get("notes", "") or ""
+    if hc_notes.startswith("pdf:"):
+        pdf_name_override = hc_notes[4:].strip()
+
     return {
         "matched": True,
-        "name": name,
+        "name": pdf_name_override or name,
         "nohinsaki_code": safe(row.get("納品先コード", "")),
         "torihikisaki": safe(row.get("取引先名", "")),
         "torihikisaki_code": safe(row.get("取引先コード", "")),

@@ -262,9 +262,10 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
     y -= dest_row_h + 8
 
     # Product table
+    uw_mm = uw / mm  # usable width in mm
     prod_cols = [
-        (0, 30), (30, 78), (108, 18), (126, 16),
-        (142, 14), (156, 14), (170, 14), (184, 14),
+        (0, 30), (30, 72), (102, 20), (122, 18),
+        (140, 18), (158, 22), (180, 22), (202, uw_mm - 202),
     ]
     prod_labels = ["JANコード", "商品名", "規格", "配送荷姿", "1袋単価", "CS単価", "数量(CS)", "金額"]
     prod_hdr_h = 22
@@ -290,8 +291,8 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
 
         draw_clipped(c, item.get('jan', ''), ml + prod_cols[0][0] * mm + pad, ty, 29 * mm, 10)
         draw_clipped(c, item.get('name', ''), ml + prod_cols[1][0] * mm + pad, ty, 77 * mm, 11)
-        draw_clipped(c, item.get('spec', ''), ml + prod_cols[2][0] * mm + pad, ty, 17 * mm, 9)
-        draw_clipped(c, item.get('pack', ''), ml + prod_cols[3][0] * mm + pad, ty, 15 * mm, 9)
+        draw_clipped(c, item.get('spec', ''), ml + prod_cols[2][0] * mm + pad, ty, 19 * mm, 9)
+        draw_clipped(c, item.get('pack', ''), ml + prod_cols[3][0] * mm + pad, ty, 17 * mm, 9)
 
         c.setFont(FONT, 11)
         c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1]) * mm - pad, ty,

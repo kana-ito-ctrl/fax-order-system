@@ -670,11 +670,12 @@ def _classify_product_group(product_name):
         return "X", "-X"
 
 
-def _build_group_remarks(group_items):
+def _build_group_remarks(group_items, slip_no=""):
     """グループ内の商品から出荷備考を生成する。
 
-    Snack例: 和紅茶47cs賞味2027/01/05 トリュフ47cs賞味2027/01/05 [二重梱包]
-    その他例: 賞味2027/06/01
+    出力例（セル内改行あり）:
+    発注番号00565754
+    2Gummy_アテンションシールあり賞味2027/07/31 [二重梱包]
     """
     parts = []
     has_double_pack = False
@@ -704,9 +705,15 @@ def _build_group_remarks(group_items):
         if it.get("double_pack"):
             has_double_pack = True
 
-    remarks = " ".join(parts)
+    product_line = " ".join(parts)
     if has_double_pack:
-        remarks += " [二重梱包]"
+        product_line += " [二重梱包]"
+
+    # 発注番号を先頭行に、商品情報を2行目に（セル内改行）
+    if slip_no:
+        remarks = f"発注番号{slip_no}\n{product_line}"
+    else:
+        remarks = product_line
     return remarks
 
 
@@ -783,8 +790,8 @@ def results_to_coola_csv(results, pdf_name):
                     pass
             group_tax = int(group_total * 0.1)
 
-            # 出荷備考を生成
-            remarks = _build_group_remarks(group_items)
+            # 出荷備考を生成（発注番号＋商品情報をセル内改行で記載）
+            remarks = _build_group_remarks(group_items, slip_no)
 
             # グループ内の全CS数合計（配送方法判定用）
             total_cs_in_group = 0
