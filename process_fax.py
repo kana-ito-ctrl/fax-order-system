@@ -1125,6 +1125,7 @@ def generate_pdfs(results, pdf_name, staff_name="伊藤"):
                 "palette": ddc.get("palette", ""),
                 "jpr": ddc.get("jpr", ""),
                 "method": ddc.get("method", ""),
+                "notes": ddc.get("notes", ""),
             }
             pdf_buf = gen_haruna_pdf(order_data, ddc_data, staff_name)
             out_name = f"ハルナ_{base_name}_p{page_num}.pdf"

@@ -627,11 +627,16 @@ def _ddc_row_to_dict(row):
     if hc is None:
         hc = {}
 
-    # haruna_conditions.notes が "pdf:表示名" 形式の場合、PDF上の納品先名を上書き
+    # haruna_conditions.notes の取り扱い:
+    # - "pdf:表示名" 形式 → PDF上の納品先名を上書き（既存動作）
+    # - それ以外 → 「備考」として PDF に表示（Amazon FBA等の固定備考用途）
     pdf_name_override = ""
     hc_notes = hc.get("notes", "") or ""
+    notes_for_display = ""
     if hc_notes.startswith("pdf:"):
         pdf_name_override = hc_notes[4:].strip()
+    else:
+        notes_for_display = hc_notes
 
     return {
         "matched": True,
@@ -648,6 +653,7 @@ def _ddc_row_to_dict(row):
         "palette": hc.get("pallet_condition", ""),
         "jpr": hc.get("jpr_code", ""),
         "method": safe(row.get("納品方法", "")),
+        "notes": notes_for_display,
     }
 
 

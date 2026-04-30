@@ -474,13 +474,23 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     draw_table_row(c, ml, y, info_cols, uw, info_h)
     ty = cell_mid_y(y, info_h, 10)
     draw_clipped(c, safe_str(ddc.get('berse', '無')), ml + pad, ty, 49 * mm, 10)
-    draw_clipped(c, safe_str(ddc.get('palette', '')), ml + 50 * mm + pad, ty, 59 * mm, 10)
+    # パレット条件: 値 + JPRコード（あれば併記）
+    palette = safe_str(ddc.get('palette', ''))
     jpr = safe_str(ddc.get('jpr', ''))
-    method = safe_str(ddc.get('method', ''))
+    palette_text = palette
     if jpr:
-        draw_clipped(c, "JPRコード：%s" % jpr, ml + 110 * mm + pad, ty, 87 * mm, 10)
-    elif method:
-        draw_clipped(c, method, ml + 110 * mm + pad, ty, 87 * mm, 10)
+        palette_text = (palette + " / " if palette else "") + "JPR：%s" % jpr
+    draw_clipped(c, palette_text, ml + 50 * mm + pad, ty, 59 * mm, 10)
+    # 備考: haruna_conditions.notes（固定備考）+ 納品方法
+    notes = safe_str(ddc.get('notes', ''))
+    method = safe_str(ddc.get('method', ''))
+    bikou_parts = []
+    if notes:
+        bikou_parts.append(notes)
+    if method:
+        bikou_parts.append(method)
+    if bikou_parts:
+        draw_clipped(c, " / ".join(bikou_parts), ml + 110 * mm + pad, ty, 87 * mm, 10)
     y -= info_h + 6
 
     # Product table
