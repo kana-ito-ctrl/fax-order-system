@@ -489,10 +489,19 @@ def match_ddc(dest_name, ddc_master, max_candidates=3, sender=""):
     # 2. Fuzzy scoring → 上位N件を候補として返す
     DDC_FUZZY_THRESHOLD = 0.35  # 候補収集は広めに（採用判定は0.7以上）
     scored = []
+    scored_facility = {}  # row index → facility_ok (True/False/None)
     sender_matched = []  # 発注元プレフィックスが一致するマスタ（base scoreに関わらず収集）
-    for _, row in ddc_master.iterrows():
-        master_name = normalize(row["納品先名"])
-        master_company = normalize_company(row["納品先名"])
+
+    # マスタ名から「[コード] / 住所...」サフィックスを剥がす（スコアリング用）
+    import re as _re_strip
+    def _strip_master_suffix(s):
+        t = _re_strip.sub(r'\s*\[[^\]]*\]\s*/\s*.*$', '', s)
+        return _re_strip.sub(r'\s*\[[^\]]*\]\s*$', '', t).strip()
+
+    for idx, row in ddc_master.iterrows():
+        raw_master = row["納品先名"]
+        master_name = normalize(_strip_master_suffix(str(raw_master)))
+        master_company = normalize_company(_strip_master_suffix(str(raw_master)))
         base_score = _score_ddc(dest_name_clean, dest_company, master_name, master_company)
 
         is_sender_match = (
@@ -545,6 +554,7 @@ def match_ddc(dest_name, ddc_master, max_candidates=3, sender=""):
 
         if final_score >= DDC_FUZZY_THRESHOLD:
             scored.append((final_score, row))
+            scored_facility[id(row)] = facility_ok
 
         # OCR誤読対策: 発注元マッチのマスタはbaseスコアが低くても別収集しておく
         if is_sender_match:
@@ -576,6 +586,12 @@ def match_ddc(dest_name, ddc_master, max_candidates=3, sender=""):
     # 1位が0.7以上なら採用
     if scored and scored[0][0] >= 0.7:
         best_score, best_row = scored[0]
+        best_facility = scored_facility.get(id(best_row))
+        # 施設名が明確に不一致なベスト候補は自動マッチさせない（誤確定を防止）
+        # 例: OCR=「伊藤忠食品 北陸物流センター」、マスタに「伊藤忠食品 三郷/昭島...」しか無いケース
+        # → 候補リストには残し、ユーザーが手動選択する運用へ
+        if best_facility is False:
+            return {"matched": False, "name": dest_name, "candidates": candidates}
         result = _ddc_row_to_dict(best_row)
         result["match_score"] = best_score
         # 0.90未満は低信頼度（候補確認推奨）

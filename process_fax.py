@@ -27,10 +27,44 @@ from pdf_generator import gen_sylvia_pdf, gen_haruna_pdf
 
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+HISTORY_DIR = os.path.join(OUTPUT_DIR, "履歴")
 
 
 def ensure_output_dir():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(HISTORY_DIR, exist_ok=True)
+
+
+def _archive_existing_file(path: str) -> str | None:
+    """書込先に既存ファイルがあれば、履歴フォルダへ退避する。
+
+    退避先ファイル名: `<basename>_YYYYMMDDHHMMSS.<ext>`
+
+    Args:
+        path: これから書き込もうとするファイルのフルパス
+
+    Returns:
+        退避したファイルのフルパス。退避不要の場合は None。
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        os.makedirs(HISTORY_DIR, exist_ok=True)
+        base = os.path.basename(path)
+        name, ext = os.path.splitext(base)
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%Y%m%d%H%M%S")
+        archived = os.path.join(HISTORY_DIR, f"{name}_{ts}{ext}")
+        # 衝突回避（同秒に複数回呼ばれた場合）
+        if os.path.exists(archived):
+            archived = os.path.join(HISTORY_DIR, f"{name}_{ts}_{os.getpid()}{ext}")
+        import shutil as _shutil
+        _shutil.move(path, archived)
+        return archived
+    except OSError as e:
+        # 退避失敗は致命的ではない（書き込みは続行）
+        print(f"[output履歴] 退避失敗 {path}: {e}")
+        return None
 
 
 def parse_infomart_csv(csv_bytes, filename="infomart.csv"):
@@ -155,6 +189,167 @@ def parse_infomart_csv(csv_bytes, filename="infomart.csv"):
             "ddc_match": ddc_match,
             "sylvia_items": sylvia_items,
             "haruna_items": haruna_items,
+        })
+
+    return results
+
+
+def parse_smacla_csv(csv_bytes, filename="smacla.csv"):
+    """スマクラ受注伝票CSV（株式会社スタイリングライフ・ホールディングス 等）を読み込み、results形式に変換する。
+
+    特徴:
+    - 1メッセージID毎に1受注（複数商品=複数行で構成）
+    - エンコーディング: Shift-JIS
+    - 数量は「発注数量（バラ）」=本数で記載されているので、入数でCS数に換算
+    - JANコードで商品マッチング、納品先名でDDCマッチング
+    """
+    import unicodedata
+    import io
+    from collections import OrderedDict
+    from ocr_module import match_product, match_ddc, load_product_master, load_ddc_master
+
+    pm = load_product_master()
+    ddc_master = load_ddc_master()
+
+    # CSV読込（Shift-JIS優先）
+    text = None
+    for enc in ['shift_jis', 'cp932', 'utf-8-sig', 'utf-8']:
+        try:
+            text = csv_bytes.decode(enc)
+            break
+        except (UnicodeDecodeError, AttributeError):
+            continue
+    if text is None:
+        return []
+
+    reader = csv.DictReader(io.StringIO(text))
+    rows = list(reader)
+    if not rows:
+        return []
+
+    # メッセージ識別IDでグループ化（1メッセージ=1受注）
+    msg_groups = OrderedDict()
+    for r in rows:
+        msg_id = (r.get('メッセージ識別ID') or '').strip()
+        if not msg_id:
+            continue
+        msg_groups.setdefault(msg_id, []).append(r)
+
+    results = []
+    page = 0
+    for msg_id, group_rows in msg_groups.items():
+        page += 1
+        first = group_rows[0]
+
+        # ヘッダー情報
+        sender = unicodedata.normalize('NFKC', (first.get('発注者名称') or '').strip())
+        dest_name = unicodedata.normalize('NFKC', (first.get('最終納品先名称') or '').strip())
+        nohinsaki_code = (first.get('最終納品先コード') or '').strip()
+        # 取引番号（顧客側の発注書番号）を伝票番号として使う
+        slip_no = (first.get('取引番号（発注・返品）') or '').strip()
+        order_date = (first.get('発注日') or '').strip()
+        delivery_date = (first.get('最終納品先納品日') or first.get('直接納品先納品日') or '').strip()
+
+        # 日付フォーマット変換: YYYYMMDD → YYYY-MM-DD
+        def _fmt_date(s):
+            s = (s or '').strip()
+            if len(s) == 8 and s.isdigit():
+                return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
+            return s
+
+        order_date = _fmt_date(order_date)
+        delivery_date = _fmt_date(delivery_date)
+
+        # DDCマッチング（コード優先→名前）
+        ddc_match = None
+        if nohinsaki_code and ddc_master is not None and '納品先コード' in ddc_master.columns:
+            mask = ddc_master['納品先コード'].astype(str).str.strip() == nohinsaki_code
+            if mask.any():
+                from ocr_module import _ddc_row_to_dict
+                ddc_match = _ddc_row_to_dict(ddc_master[mask].iloc[0])
+                ddc_match['match_score'] = 1.0
+                ddc_match['low_confidence'] = False
+                ddc_match['candidates'] = []
+        if ddc_match is None:
+            ddc_match = match_ddc(dest_name, ddc_master, sender=sender)
+
+        # 商品行
+        matched_items = []
+        for r in group_rows:
+            jan = (r.get('商品コード（ＧTIN）') or r.get('商品コード（発注用）') or '').strip()
+            product_name = unicodedata.normalize('NFKC', (r.get('商品名') or '').strip())
+            try:
+                bara_qty = int(r.get('発注数量（バラ）') or 0)
+            except (ValueError, TypeError):
+                bara_qty = 0
+            try:
+                unit_price = float(r.get('売単価') or 0)
+            except (ValueError, TypeError):
+                unit_price = 0.0
+            try:
+                amount = float(r.get('売価金額') or 0)
+            except (ValueError, TypeError):
+                amount = 0.0
+
+            # 商品マスタから入数取得 → CS換算
+            cs_qty = 0
+            irisuu = 0
+            if pm is not None and 'JANコード' in pm.columns:
+                pmask = pm['JANコード'].astype(str).str.strip() == jan
+                if pmask.any():
+                    prow = pm[pmask].iloc[0]
+                    try:
+                        irisuu = int(prow.get('入数') or 0)
+                    except (ValueError, TypeError):
+                        irisuu = 0
+            if irisuu > 0 and bara_qty > 0:
+                # 整数CS換算（バラが入数の倍数の前提）
+                cs_qty = bara_qty // irisuu
+
+            ocr_item = {
+                'jan_code': jan,
+                'product_name': product_name,
+                'quantity_cs': cs_qty,
+            }
+            match = match_product(ocr_item, pm)
+            if match:
+                # スマクラ側の単価情報を反映（スマクラの売単価＝当方の卸単価）
+                if unit_price:
+                    match['unit_price'] = unit_price
+                if amount:
+                    match['amount'] = amount
+                matched_items.append(match)
+            else:
+                matched_items.append({
+                    'matched': False,
+                    'ocr_name': product_name,
+                    'jan': jan,
+                    'quantity': cs_qty,
+                    'unit_price': unit_price,
+                    'amount': amount,
+                })
+
+        # 出力先でグルーピング
+        sylvia_items = [i for i in matched_items if i.get('matched') and i.get('output_dest') == 'シルビア']
+        haruna_items = [i for i in matched_items if i.get('matched') and i.get('output_dest') == 'ハルナ']
+
+        results.append({
+            'page': page,
+            'source': 'smacla',
+            'source_file': filename,
+            'ocr_raw': {
+                'order_no': slip_no or msg_id,
+                'order_date': order_date,
+                'delivery_date': delivery_date,
+                'delivery_dest': dest_name,
+                'sender': sender,
+                'notes': f'スマクラ受注 / メッセージID:{msg_id}',
+                'items': [],
+            },
+            'matched_items': matched_items,
+            'ddc_match': ddc_match,
+            'sylvia_items': sylvia_items,
+            'haruna_items': haruna_items,
         })
 
     return results
@@ -334,6 +529,7 @@ def results_to_csv(results, pdf_name):
                 "備考": ocr.get("notes", ""),
             })
 
+    _archive_existing_file(csv_path)
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
         if rows:
             writer = csv.DictWriter(f, fieldnames=rows[0].keys())
@@ -485,7 +681,9 @@ def results_to_ne_csv(results, pdf_name):
                 "発送方法": "",
                 "商品計": total_amount,
                 "税金": tax,
-                "発送料": 0,
+                # Phase 4: ロット割れ自社倉庫出荷時に shipping_fee_calculator で算出した送料を反映
+                # （TWO負担の場合は 0、未計算の場合も 0）
+                "発送料": int(page_result.get("shipping_fee") or 0),
                 "手数料": 0,
                 "ポイント": 0,
                 "その他費用": 0,
@@ -510,6 +708,7 @@ def results_to_ne_csv(results, pdf_name):
             }
             rows.append(row)
 
+    _archive_existing_file(csv_path)
     with open(csv_path, "w", newline="", encoding="cp932", errors="replace") as f:
         writer = csv.DictWriter(f, fieldnames=NE_HEADERS)
         writer.writeheader()
@@ -760,7 +959,22 @@ def results_to_coola_csv(results, pdf_name):
         pref, addr1, addr2, addr3 = _split_address(dest_address)
 
         # マッチ済み商品をグループに分類
-        matched_items = [it for it in page_result.get("matched_items", []) if it.get("matched")]
+        all_matched = [it for it in page_result.get("matched_items", []) if it.get("matched")]
+        # Phase 4: COOLA は自社倉庫出荷システムなので、直送商品（ハルナ/シルビア 10cs以上）は除外
+        # 同 output_dest の合計CS が 10以上 → 直送、未満 → ロット割れ自社倉庫経由（COOLA対象）
+        from collections import defaultdict as _dd
+        _cs_by_dest = _dd(int)
+        for _it in all_matched:
+            try:
+                _cs_by_dest[_it.get("output_dest") or ""] += int(float(_it.get("quantity") or 0))
+            except (TypeError, ValueError):
+                pass
+        def _is_direct_shipping(it):
+            od = it.get("output_dest") or ""
+            if od in ("シルビア", "ハルナ"):
+                return _cs_by_dest[od] >= 10
+            return False
+        matched_items = [it for it in all_matched if not _is_direct_shipping(it)]
         if not matched_items:
             continue
 
@@ -849,7 +1063,9 @@ def results_to_coola_csv(results, pdf_name):
                     "配送時間帯": time_code,
                     "顧客id": two_order_no,
                     "税種区分": "1",
-                    "送料": 0,
+                    # Phase 4: ロット割れ自社倉庫出荷時に shipping_fee_calculator で算出した送料を反映
+                    # （TWO負担の場合は 0、未計算の場合も 0）
+                    "送料": int(page_result.get("shipping_fee") or 0),
                     "代引手数料": 0,
                     "消費税": group_tax,
                     "ポイント使用額": 0,
@@ -877,6 +1093,7 @@ def results_to_coola_csv(results, pdf_name):
     if not rows:
         return None
 
+    _archive_existing_file(csv_path)
     with open(csv_path, "w", newline="", encoding="cp932", errors="replace") as f:
         writer = csv.DictWriter(f, fieldnames=COOLA_HEADERS, quoting=csv.QUOTE_ALL)
         writer.writeheader()
@@ -1049,6 +1266,7 @@ def results_to_excel(results, pdf_name):
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}1"
 
+    _archive_existing_file(xlsx_path)
     wb.save(xlsx_path)
     return xlsx_path
 
@@ -1100,6 +1318,7 @@ def generate_pdfs(results, pdf_name, staff_name="伊藤"):
             pdf_buf = gen_sylvia_pdf(order_data, items_data, staff_name)
             out_name = f"シルビア_{base_name}_p{page_num}.pdf"
             out_path = os.path.join(OUTPUT_DIR, out_name)
+            _archive_existing_file(out_path)
             with open(out_path, "wb") as f:
                 f.write(pdf_buf.read())
             generated.append(("シルビア", out_path))
@@ -1130,6 +1349,7 @@ def generate_pdfs(results, pdf_name, staff_name="伊藤"):
             pdf_buf = gen_haruna_pdf(order_data, ddc_data, staff_name)
             out_name = f"ハルナ_{base_name}_p{page_num}.pdf"
             out_path = os.path.join(OUTPUT_DIR, out_name)
+            _archive_existing_file(out_path)
             with open(out_path, "wb") as f:
                 f.write(pdf_buf.read())
             generated.append(("ハルナ", out_path))

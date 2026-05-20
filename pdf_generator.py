@@ -161,6 +161,11 @@ def draw_table_row(c, ml, row_top, col_defs, uw, row_h, fill_color=None):
 
 # ========== Sylvia PDF ==========
 def gen_sylvia_pdf(order, items, staff_name="伊藤"):
+    """シルビア様 発注書PDF生成。
+
+    order に 'confirmed_at' キー（例: "2026-04-30 14:30"）を入れると、日付の右隣に
+    赤字で「確定: ...」を表示する。Phase 4 の確定時印字に使用。
+    """
     buf = BytesIO()
     staff_data = load_staff()
     company = staff_data["company"]
@@ -188,7 +193,18 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
     c.drawString(ml, y, "（株）シルビア 本社")
     rx = w - mr - 75 * mm
     c.setFont(FONT, 11)
-    c.drawString(rx, y, "日付　%s" % safe_str(order.get('order_date', '')))
+    date_str = safe_str(order.get('order_date', ''))
+    c.drawString(rx, y, "日付　%s" % date_str)
+    # 確定日時を 日付 の右隣に赤字で表示（Phase 4 で使用）
+    confirmed_str = safe_str(order.get('confirmed_at', ''))
+    if confirmed_str:
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        base_w = stringWidth("日付　%s    " % date_str, FONT, 11)
+        c.setFont(FONT, 8.5)
+        c.setFillColor(colors.HexColor("#C62828"))
+        c.drawString(rx + base_w, y, "確定: %s" % confirmed_str)
+        c.setFillColor(colors.black)
+        c.setFont(FONT, 11)
     y -= 16
     c.setFont(FONT, 11)
     c.drawString(ml, y, "ご担当者様")
@@ -353,6 +369,11 @@ def gen_sylvia_pdf(order, items, staff_name="伊藤"):
 
 # ========== Haruna PDF ==========
 def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
+    """ハルナプロデュース様 発注書PDF生成。
+
+    order に 'confirmed_at' キー（例: "2026-04-30 14:30"）を入れると、日付の右隣に
+    赤字で「確定: ...」を表示する。Phase 4 の確定時印字に使用。
+    """
     buf = BytesIO()
     staff_data = load_staff()
     company = staff_data["company"]
@@ -380,7 +401,18 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     c.drawString(ml, y, "ハルナプロデュース㈱")
     rx = w - mr - 80 * mm
     c.setFont(FONT, 11)
-    c.drawString(rx, y, "日付　%s" % safe_str(order.get('order_date', '')))
+    date_str = safe_str(order.get('order_date', ''))
+    c.drawString(rx, y, "日付　%s" % date_str)
+    # 確定日時を 日付 の右隣に赤字で表示（Phase 4 で使用）
+    confirmed_str = safe_str(order.get('confirmed_at', ''))
+    if confirmed_str:
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        base_w = stringWidth("日付　%s    " % date_str, FONT, 11)
+        c.setFont(FONT, 8.5)
+        c.setFillColor(colors.HexColor("#C62828"))
+        c.drawString(rx + base_w, y, "確定: %s" % confirmed_str)
+        c.setFillColor(colors.black)
+        c.setFont(FONT, 11)
     y -= 15
     c.setFont(FONT, 11)
     c.drawString(ml, y, "受注ご担当者様")

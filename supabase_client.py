@@ -9,7 +9,19 @@ import urllib.request
 import urllib.error
 import pandas as pd
 
-# Supabase設定（環境変数から取得）
+# ローカル開発用: .env ファイルを読み込む（依存ライブラリなし）
+# Render等の本番環境では環境変数が直接設定されているので .env なし＝OK
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(_env_path):
+    with open(_env_path, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
+
+# Supabase設定（環境変数のみ参照・ハードコード fallback なし）
+# ローカル: .env から読み込み済み / Render: ダッシュボードの Environment Variables から
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
@@ -30,6 +42,264 @@ def _supabase_get(table: str, query_params: str = "") -> list[dict] | None:
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
         print(f"  [Supabase] {table} 取得失敗: {e}")
         return None
+
+
+def _supabase_post(table: str, data: dict | list[dict], return_representation: bool = True) -> list[dict] | None:
+    """Supabase REST API POSTリクエスト（INSERT）。失敗時はNoneを返す。"""
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+    if return_representation:
+        headers["Prefer"] = "return=representation"
+    payload = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
+    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body) if body else []
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace") if hasattr(e, "read") else str(e)
+        print(f"  [Supabase] {table} INSERT失敗 HTTP{e.code}: {err_body[:300]}")
+        return None
+    except (urllib.error.URLError, TimeoutError) as e:
+        print(f"  [Supabase] {table} INSERT失敗: {e}")
+        return None
+
+
+def _supabase_patch(table: str, query_params: str, data: dict) -> list[dict] | None:
+    """Supabase REST API PATCHリクエスト（UPDATE）。"""
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{query_params}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    payload = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
+    req = urllib.request.Request(url, data=payload, headers=headers, method="PATCH")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body) if body else []
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace") if hasattr(e, "read") else str(e)
+        print(f"  [Supabase] {table} UPDATE失敗 HTTP{e.code}: {err_body[:300]}")
+        return None
+    except (urllib.error.URLError, TimeoutError) as e:
+        print(f"  [Supabase] {table} UPDATE失敗: {e}")
+        return None
+
+
+def confirm_fax_order(
+    order_id: str,
+    *,
+    confirmed_by: str,
+    snapshot: dict,
+    shipping_fee: int | None = None,
+    shipping_fee_two_burden: bool = False,
+    shipping_fee_breakdown: dict | None = None,
+    edited_header: dict | None = None,
+) -> dict | None:
+    """Phase 4: draft → confirmed の遷移処理。
+
+    1) 現行レコードの confirmation_count を取得
+    2) status='confirmed' / confirmed_at=now / confirmed_by / confirmation_count++
+       confirmation_history に snapshot を append
+       shipping_fee 関連も同時に更新
+    3) edited_header で編集されたフィールド（partner_name 等）も更新
+
+    Args:
+        order_id: fax_orders_scm の id (UUID)
+        confirmed_by: 確定者名（staff_name）
+        snapshot: 確定時点のフルデータ（後で版間比較に使う）
+        shipping_fee: 送料(税抜・円)。None なら更新しない
+        shipping_fee_two_burden: True ならTWO負担（CSVには 0 が入る）
+        shipping_fee_breakdown: calculate_shipping_fee の戻り値そのもの
+        edited_header: 編集されたヘッダー項目（delivery_date, partner_name, ...）
+
+    Returns:
+        更新後のレコード dict、失敗時 None
+    """
+    from datetime import datetime, timezone, timedelta
+    JST = timezone(timedelta(hours=9))
+
+    # 現行 confirmation_count + history を取得
+    current = _supabase_get(
+        "fax_orders_scm",
+        f"id=eq.{order_id}&select=confirmation_count,confirmation_history,status"
+    )
+    if not current:
+        print(f"  [Supabase] confirm_fax_order: order_id={order_id} not found")
+        return None
+
+    cur = current[0]
+    new_count = (cur.get("confirmation_count") or 0) + 1
+    history = list(cur.get("confirmation_history") or [])
+    confirmed_at = datetime.now(JST).isoformat(timespec="seconds")
+    history.append({
+        "at": confirmed_at,
+        "by": confirmed_by,
+        "snapshot": snapshot,
+    })
+
+    payload = {
+        "status": "confirmed",
+        "confirmed_at": confirmed_at,
+        "confirmed_by": confirmed_by,
+        "confirmation_count": new_count,
+        "confirmation_history": history,
+    }
+    if shipping_fee is not None:
+        payload["shipping_fee"] = int(shipping_fee)
+    payload["shipping_fee_two_burden"] = bool(shipping_fee_two_burden)
+    if shipping_fee_breakdown is not None:
+        payload["shipping_fee_breakdown"] = shipping_fee_breakdown
+
+    # 編集されたヘッダー項目をマージ（None 値は除外）
+    if edited_header:
+        for k, v in edited_header.items():
+            if v is not None:
+                payload[k] = v
+
+    result = _supabase_patch("fax_orders_scm", f"id=eq.{order_id}", payload)
+    if result:
+        print(f"  [Supabase] confirm 完了: order_id={order_id[:8]}.. count={new_count}")
+        return result[0] if isinstance(result, list) else result
+    print(f"  [Supabase] confirm 失敗: order_id={order_id[:8]}..")
+    return None
+
+
+def insert_fax_order(header: dict, items: list[dict]) -> str | None:
+    """fax_orders_scm にヘッダーをINSERT、fax_order_items_scm に明細をINSERTする。
+
+    Args:
+        header: fax_orders_scm 用の辞書（source_channel, status, slip_number等）
+        items:  fax_order_items_scm 用の辞書リスト（order_idは自動設定）
+
+    Returns:
+        作成したorderのUUID。失敗時はNone。
+    """
+    # ① ヘッダーINSERT
+    inserted = _supabase_post("fax_orders_scm", header)
+    if not inserted:
+        return None
+    order_id = inserted[0].get("id")
+    if not order_id:
+        return None
+
+    # ② 明細INSERT（order_idを埋め込む）
+    if items:
+        items_with_fk = [{**item, "order_id": order_id} for item in items]
+        result = _supabase_post("fax_order_items_scm", items_with_fk)
+        if result is None:
+            # 明細失敗時はヘッダーも巻き戻す
+            print(f"  [Supabase] 明細INSERT失敗のためヘッダーを削除: {order_id}")
+            url = f"{SUPABASE_URL}/rest/v1/fax_orders_scm?id=eq.{order_id}"
+            req = urllib.request.Request(url, headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+            }, method="DELETE")
+            try:
+                urllib.request.urlopen(req, timeout=10)
+            except Exception:
+                pass
+            return None
+
+    return order_id
+
+
+def check_fax_order_exists(source_email_id: str, ocr_page_no: int) -> bool:
+    """既に同じメール×ページの受注がfax_orders_scmに存在するかチェックする。"""
+    query = f"source_email_id=eq.{source_email_id}&ocr_page_no=eq.{ocr_page_no}&select=id"
+    rows = _supabase_get("fax_orders_scm", query)
+    return rows is not None and len(rows) > 0
+
+
+def fetch_pending_orders(limit: int = 200, source_channel: str | None = None) -> list[dict]:
+    """確認待ち受注（status='draft' or 'error'）を新しい順に取得する。
+
+    fax_orders_scm のみ対象（インフォマートは別画面で確認するため除外）。
+
+    Args:
+        limit: 取得上限件数
+        source_channel: 'efax' / 'paltac' / None（すべて）
+
+    Returns:
+        ヘッダーレコードのリスト（明細は含まない、確認画面のサマリ用）
+    """
+    cols = (
+        "id,source_channel,status,slip_number,order_date,delivery_date,"
+        "partner_name,delivery_location_name,grand_total,ddc_matched,"
+        "warehouse,shipping_type,status_flags,source_file_name,"
+        "source_email_from,source_email_received_at,ocr_page_no,created_at"
+    )
+    query_parts = [
+        f"select={cols}",
+        "status=in.(draft,error)",
+        f"order=created_at.desc",
+        f"limit={limit}",
+    ]
+    if source_channel:
+        query_parts.append(f"source_channel=eq.{source_channel}")
+    rows = _supabase_get("fax_orders_scm", "&".join(query_parts))
+    return rows if rows is not None else []
+
+
+def fetch_confirmed_orders(limit: int = 200, source_channel: str | None = None,
+                           days: int | None = 90) -> list[dict]:
+    """確定済受注（status='confirmed'）を確定日時の新しい順に取得する。
+
+    Phase 4 `/confirmed` ページ用。
+
+    Args:
+        limit: 取得上限件数
+        source_channel: 'efax' / 'paltac' / None（すべて）
+        days: 直近N日以内に絞る（None で無制限）。デフォルト90日
+
+    Returns:
+        ヘッダーレコードのリスト（confirmation_count, confirmed_at, shipping_fee 含む）
+    """
+    cols = (
+        "id,source_channel,status,slip_number,order_date,delivery_date,"
+        "partner_name,delivery_location_name,grand_total,ddc_matched,"
+        "warehouse,shipping_type,status_flags,source_file_name,"
+        "source_email_from,source_email_received_at,ocr_page_no,created_at,"
+        "confirmed_at,confirmed_by,confirmation_count,"
+        "shipping_fee,shipping_fee_two_burden"
+    )
+    query_parts = [
+        f"select={cols}",
+        "status=eq.confirmed",
+        "order=confirmed_at.desc",
+        f"limit={limit}",
+    ]
+    if source_channel:
+        query_parts.append(f"source_channel=eq.{source_channel}")
+    if days is not None:
+        from datetime import datetime, timedelta, timezone
+        # +00:00 を含めると URL でスペース化するため "Z" リテラルで UTC 表現
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        query_parts.append(f"confirmed_at=gte.{cutoff}")
+    rows = _supabase_get("fax_orders_scm", "&".join(query_parts))
+    return rows if rows is not None else []
+
+
+def fetch_order_with_items(order_id: str) -> dict | None:
+    """ヘッダー1件と紐づく明細を取得する（確認画面の詳細表示用）"""
+    header_rows = _supabase_get("fax_orders_scm", f"id=eq.{order_id}&select=*")
+    if not header_rows:
+        return None
+    items = _supabase_get(
+        "fax_order_items_scm",
+        f"order_id=eq.{order_id}&select=*&order=line_no.asc"
+    )
+    return {
+        "header": header_rows[0],
+        "items": items if items is not None else [],
+    }
 
 
 def load_product_master_from_supabase() -> pd.DataFrame | None:
@@ -286,4 +556,16 @@ def clear_all_caches():
     global _torihikisaki_cache, _haruna_conditions_cache
     _torihikisaki_cache = None
     _haruna_conditions_cache = None
+    # shipping_rules cache も巻き戻す（warehouse 名変更等の即時反映用）
+    try:
+        import shipping_judge
+        shipping_judge._shipping_rules_cache = None
+    except Exception:
+        pass
+    # products / fax_product_master キャッシュも（shipping_fee_calculator）
+    try:
+        import shipping_fee_calculator
+        shipping_fee_calculator._products_cache = None
+    except Exception:
+        pass
     print("  [Cache] 全キャッシュをクリアしました")

@@ -84,7 +84,7 @@ def judge_shipping(output_dest: str, total_cs: int, jan: str = None, ddc_code: s
 
 
 def judge_warehouse(output_dest: str, total_cs: int, jan: str = None, ddc_code: str = None) -> str:
-    """具体的な出荷倉庫名を返す（直送の場合はシルビア/ハルナ、自社倉庫の場合はSBS/ベルーナ等）
+    """具体的な出荷倉庫名を返す（直送の場合はシルビア/ハルナ、自社倉庫の場合はベルーナ等）
 
     Args:
         output_dest: 出力先
@@ -93,7 +93,9 @@ def judge_warehouse(output_dest: str, total_cs: int, jan: str = None, ddc_code: 
         ddc_code: 納品先コード
 
     Returns:
-        倉庫名 (例: "シルビア", "ハルナ", "SBS", "ベルーナ")
+        倉庫名 (例: "シルビア", "ハルナ", "ベルーナ")
+
+    Note: 2026-05-01 より自社倉庫表記を「SBS」→「ベルーナ」に統一
     """
     rules = _load_shipping_rules()
     if rules:
