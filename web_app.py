@@ -2241,58 +2241,58 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background: #f0f2f5; color: #333; }
 
-.header { background: #2F5496; color: white; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; }
-.header h1 { font-size: 22px; font-weight: 600; }
-.header .status { font-size: 15px; opacity: 0.8; }
+.header { background: #2F5496; color: white; padding: 6px 14px; display: flex; align-items: center; justify-content: space-between; }
+.header h1 { font-size: 17px; font-weight: 600; }
+.header .status { font-size: 12px; opacity: 0.8; }
 
 .upload-zone {
-    margin: 16px 24px; padding: 32px; background: white; border: 2px dashed #aaa;
-    border-radius: 8px; text-align: center; cursor: pointer; transition: all 0.2s;
+    margin: 10px 14px; padding: 20px; background: white; border: 2px dashed #aaa;
+    border-radius: 6px; text-align: center; cursor: pointer; transition: all 0.2s;
 }
 .upload-zone:hover, .upload-zone.drag-over { border-color: #2F5496; background: #f0f4ff; }
 .upload-zone input { display: none; }
-.upload-zone p { color: #666; font-size: 17px; }
+.upload-zone p { color: #666; font-size: 14px; }
 
-.main-area { display: flex; margin: 0 24px 24px; gap: 16px; height: calc(100vh - 200px); }
+.main-area { display: flex; margin: 0 12px 12px; gap: 10px; height: calc(100vh - 140px); }
 .main-area.hidden { display: none; }
 
 .left-panel {
-    flex: 0 0 42%; background: #1a1a1a; border-radius: 8px; overflow: hidden;
+    flex: 0 0 36%; background: #1a1a1a; border-radius: 6px; overflow: hidden;
     display: flex; flex-direction: column;
 }
 .left-panel .page-nav {
-    background: #2a2a2a; padding: 8px 12px; display: flex; align-items: center;
-    justify-content: center; gap: 12px; color: #ccc; font-size: 13px;
+    background: #2a2a2a; padding: 5px 8px; display: flex; align-items: center;
+    justify-content: center; gap: 10px; color: #ccc; font-size: 12px;
 }
 .left-panel .page-nav button {
-    background: #444; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer;
+    background: #444; color: white; border: none; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px;
 }
 .left-panel .page-nav button:hover { background: #555; }
 .left-panel .page-nav button:disabled { opacity: 0.3; cursor: default; }
 .left-panel .preview-img {
-    flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 8px;
+    flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 6px;
 }
 .left-panel .preview-img img { max-width: 100%; height: auto; }
 
-.right-panel { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.right-panel { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 
 .card {
-    background: white; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    background: white; border-radius: 6px; padding: 10px 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     position: relative;
 }
 /* DDC検索カードはドロップダウンが他カードの上に被さるよう前面に */
 .card.ddc-card { z-index: 50; }
 .card.ddc-card.has-dropdown-open { z-index: 1000; }
-.card h3 { font-size: 17px; color: #2F5496; margin-bottom: 10px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; }
+.card h3 { font-size: 14px; color: #2F5496; margin-bottom: 6px; border-bottom: 1px solid #e0e0e0; padding-bottom: 4px; }
 
-.field-grid { display: grid; grid-template-columns: 100px 1fr; gap: 6px 12px; align-items: center; }
-.field-grid label { font-size: 15px; color: #666; font-weight: 600; text-align: right; }
+.field-grid { display: grid; grid-template-columns: 84px 1fr; gap: 4px 8px; align-items: center; }
+.field-grid label { font-size: 12px; color: #666; font-weight: 600; text-align: right; }
 .field-grid input, .field-grid select {
-    padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 15px; width: 100%;
+    padding: 5px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 13px; width: 100%;
 }
 .field-grid input:focus { outline: none; border-color: #2F5496; box-shadow: 0 0 0 2px rgba(47,84,150,0.15); }
 
-.badge { display: inline-block; padding: 3px 12px; border-radius: 10px; font-size: 13px; font-weight: 600; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 11px; font-weight: 600; }
 .badge-ok { background: #E2EFDA; color: #2d7a2d; }
 .badge-review { background: #FFF2CC; color: #b8860b; }
 .badge-ng { background: #FCE4D6; color: #c0392b; }
@@ -2303,46 +2303,45 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background
 .ddc-dropdown {
     position: absolute; top: 100%; left: 0; right: 0; z-index: 100;
     background: white; border: 1px solid #ccc; border-top: none; border-radius: 0 0 6px 6px;
-    max-height: 280px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    max-height: 240px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     display: none;
 }
 .ddc-dropdown.show { display: block; }
 .ddc-item {
-    padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #f0f0f0; transition: background 0.1s;
+    padding: 5px 10px; cursor: pointer; border-bottom: 1px solid #f0f0f0; transition: background 0.1s;
 }
 .ddc-item:hover, .ddc-item.active { background: #e8f0fe; }
-.ddc-item .ddc-name { font-size: 15px; font-weight: 600; }
-.ddc-item .ddc-addr { font-size: 13px; color: #888; margin-top: 2px; }
+.ddc-item .ddc-name { font-size: 13px; font-weight: 600; }
+.ddc-item .ddc-addr { font-size: 11px; color: #888; margin-top: 2px; }
 
-.items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.items-table th { background: #f5f5f5; padding: 4px 6px; text-align: left; font-weight: 600; border-bottom: 2px solid #ddd; white-space: nowrap; font-size: 12px; }
-.items-table td { padding: 4px 6px; border-bottom: 1px solid #eee; }
+.items-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.items-table th { background: #f5f5f5; padding: 3px 4px; text-align: left; font-weight: 600; border-bottom: 2px solid #ddd; white-space: nowrap; font-size: 11px; }
+.items-table td { padding: 3px 4px; border-bottom: 1px solid #eee; }
 .items-table tr.matched { }
 .items-table tr.unmatched { background: #FCE4D6; }
-.items-table input[type="number"] { width: 48px; padding: 3px; border: 1px solid #ddd; border-radius: 3px; text-align: right; font-size: 13px; }
-.items-table input[type="date"] { font-size: 12px; padding: 2px; border: 1px solid #ddd; border-radius: 3px; }
-.items-table select { width: 100%; max-width: 100%; min-width: 160px; font-size: 13px; padding: 2px; }
-/* 列幅: 商品名はテーブル幅から他列分を引いた残りを取る。他列は最小限の固定幅。
-   合計 ~ 670px 程度に収めて右パネル内に収まるように */
-.items-table th:nth-child(1), .items-table td:nth-child(1) { min-width: 170px; }                      /* 商品名 */
-.items-table th:nth-child(2), .items-table td:nth-child(2) { width: 105px; white-space: nowrap; }     /* JAN */
-.items-table th:nth-child(3), .items-table td:nth-child(3) { width: 60px;  white-space: nowrap; }     /* 数量(CS) */
-.items-table th:nth-child(4), .items-table td:nth-child(4) { width: 120px; white-space: nowrap; }     /* 賞味期限 */
-.items-table th:nth-child(5), .items-table td:nth-child(5) { width: 70px;  white-space: nowrap; }     /* 梱包 */
-.items-table th:nth-child(6), .items-table td:nth-child(6) { width: 60px;  white-space: nowrap; }     /* 出力先 */
-.items-table th:nth-child(7), .items-table td:nth-child(7) { width: 48px;  text-align: center; }      /* マッチ */
-.items-table th:nth-child(8), .items-table td:nth-child(8) { width: 32px; }                            /* 削除 */
+.items-table input[type="number"] { width: 44px; padding: 2px; border: 1px solid #ddd; border-radius: 3px; text-align: right; font-size: 12px; }
+.items-table input[type="date"] { font-size: 11px; padding: 1px 2px; border: 1px solid #ddd; border-radius: 3px; max-width: 100%; }
+.items-table select { width: 100%; max-width: 100%; min-width: 130px; font-size: 12px; padding: 2px; }
+/* 列幅: 商品名は残り全部。他列は最小限。合計 ~530px に収めて余裕を持って右パネル内へ */
+.items-table th:nth-child(1), .items-table td:nth-child(1) { min-width: 140px; }                      /* 商品名 */
+.items-table th:nth-child(2), .items-table td:nth-child(2) { width: 92px;  white-space: nowrap; }     /* JAN */
+.items-table th:nth-child(3), .items-table td:nth-child(3) { width: 50px;  white-space: nowrap; }     /* 数量 */
+.items-table th:nth-child(4), .items-table td:nth-child(4) { width: 100px; white-space: nowrap; }     /* 賞味期限 */
+.items-table th:nth-child(5), .items-table td:nth-child(5) { width: 60px;  white-space: nowrap; }     /* 梱包 */
+.items-table th:nth-child(6), .items-table td:nth-child(6) { width: 54px;  white-space: nowrap; }     /* 出力先 */
+.items-table th:nth-child(7), .items-table td:nth-child(7) { width: 40px;  text-align: center; }      /* マッチ */
+.items-table th:nth-child(8), .items-table td:nth-child(8) { width: 26px; }                            /* 削除 */
 
 .footer-bar {
-    margin: 0 24px 16px; padding: 12px 16px; background: white; border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; gap: 16px;
+    margin: 0 14px 8px; padding: 6px 12px; background: white; border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; gap: 10px;
 }
 .footer-bar.hidden { display: none; }
-.footer-bar label { font-size: 15px; color: #666; font-weight: 600; }
-.footer-bar input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 15px; }
+.footer-bar label { font-size: 13px; color: #666; font-weight: 600; }
+.footer-bar input { padding: 5px 10px; border: 1px solid #ddd; border-radius: 3px; font-size: 13px; }
 .btn-confirm {
-    margin-left: auto; background: #2F5496; color: white; border: none; padding: 10px 28px;
-    border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s;
+    margin-left: auto; background: #2F5496; color: white; border: none; padding: 6px 20px;
+    border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.2s;
 }
 .btn-confirm:hover { background: #1e3a6e; }
 .btn-confirm:disabled { background: #aaa; cursor: default; }
@@ -2403,7 +2402,7 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background
 </div>
 
 <!-- Phase 4: 送料計算パネル -->
-<div id="shippingPanel" class="hidden" style="margin: 16px 24px; padding: 14px 18px; background: #FFF8E1; border-left: 4px solid #FFA726; border-radius: 6px; font-size: 14px;">
+<div id="shippingPanel" class="hidden" style="margin: 8px 14px; padding: 8px 12px; background: #FFF8E1; border-left: 4px solid #FFA726; border-radius: 6px; font-size: 12px;">
   <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
     <strong style="font-size:15px;">🚚 送料計算（ロット割れ自社倉庫出荷）</strong>
     <button onclick="recalculateShipping()"
