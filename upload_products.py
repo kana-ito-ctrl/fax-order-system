@@ -1,17 +1,35 @@
 """
 ネクストエンジンCSV → Supabase products テーブル アップロードスクリプト
+
+実行前に環境変数 SUPABASE_URL / SUPABASE_KEY を設定すること。
+ローカルでは受注OCR/.env から自動読み込み（supabase_client.py と同じパターン）。
 """
 import csv
 import json
+import os
 import sys
 import urllib.request
 import urllib.error
 
 sys.stdout.reconfigure(encoding='utf-8')
 
+# .env ファイル読み込み（supabase_client.py と同じパターン）
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(_env_path):
+    with open(_env_path, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 API_KEY = os.environ.get("SUPABASE_KEY", "")
-CSV_PATH = r'C:\Users\tw2407-044\Downloads\data2026030916103282656400.csv'
+if not SUPABASE_URL or not API_KEY:
+    sys.exit("環境変数 SUPABASE_URL / SUPABASE_KEY を .env もしくはシェルで設定してください")
+
+CSV_PATH = os.environ.get("UPLOAD_PRODUCTS_CSV_PATH",
+                          r'C:\Users\tw2407-044\Downloads\data2026030916103282656400.csv')
 
 HEADERS_HTTP = {
     "apikey": API_KEY,
