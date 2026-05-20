@@ -2314,23 +2314,24 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background
 .ddc-item .ddc-name { font-size: 15px; font-weight: 600; }
 .ddc-item .ddc-addr { font-size: 13px; color: #888; margin-top: 2px; }
 
-.items-table { width: 100%; border-collapse: collapse; font-size: 15px; }
-.items-table th { background: #f5f5f5; padding: 6px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid #ddd; white-space: nowrap; }
-.items-table td { padding: 6px 8px; border-bottom: 1px solid #eee; }
+.items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.items-table th { background: #f5f5f5; padding: 4px 6px; text-align: left; font-weight: 600; border-bottom: 2px solid #ddd; white-space: nowrap; font-size: 12px; }
+.items-table td { padding: 4px 6px; border-bottom: 1px solid #eee; }
 .items-table tr.matched { }
 .items-table tr.unmatched { background: #FCE4D6; }
-.items-table input[type="number"] { width: 60px; padding: 4px; border: 1px solid #ddd; border-radius: 3px; text-align: right; }
-/* 列幅: 商品名はテーブル幅から他列分を引いた残りを取る（auto 動作）。
-   他列は固定幅で content を nowrap にして崩れ防止 */
-.items-table th:nth-child(1), .items-table td:nth-child(1) { min-width: 280px; }                      /* 商品名 */
-.items-table th:nth-child(2), .items-table td:nth-child(2) { width: 130px; white-space: nowrap; }     /* JAN */
-.items-table th:nth-child(3), .items-table td:nth-child(3) { width: 85px;  white-space: nowrap; }     /* 数量(CS) */
-.items-table th:nth-child(4), .items-table td:nth-child(4) { width: 145px; white-space: nowrap; }     /* 賞味期限 */
-.items-table th:nth-child(5), .items-table td:nth-child(5) { width: 95px;  white-space: nowrap; }     /* 梱包 */
-.items-table th:nth-child(6), .items-table td:nth-child(6) { width: 85px;  white-space: nowrap; }     /* 出力先 */
-.items-table th:nth-child(7), .items-table td:nth-child(7) { width: 60px;  text-align: center; }      /* マッチ */
-.items-table th:nth-child(8), .items-table td:nth-child(8) { width: 40px; }                            /* 削除 */
-.items-table select { width: 100%; max-width: 100%; min-width: 240px; }
+.items-table input[type="number"] { width: 48px; padding: 3px; border: 1px solid #ddd; border-radius: 3px; text-align: right; font-size: 13px; }
+.items-table input[type="date"] { font-size: 12px; padding: 2px; border: 1px solid #ddd; border-radius: 3px; }
+.items-table select { width: 100%; max-width: 100%; min-width: 160px; font-size: 13px; padding: 2px; }
+/* 列幅: 商品名はテーブル幅から他列分を引いた残りを取る。他列は最小限の固定幅。
+   合計 ~ 670px 程度に収めて右パネル内に収まるように */
+.items-table th:nth-child(1), .items-table td:nth-child(1) { min-width: 170px; }                      /* 商品名 */
+.items-table th:nth-child(2), .items-table td:nth-child(2) { width: 105px; white-space: nowrap; }     /* JAN */
+.items-table th:nth-child(3), .items-table td:nth-child(3) { width: 60px;  white-space: nowrap; }     /* 数量(CS) */
+.items-table th:nth-child(4), .items-table td:nth-child(4) { width: 120px; white-space: nowrap; }     /* 賞味期限 */
+.items-table th:nth-child(5), .items-table td:nth-child(5) { width: 70px;  white-space: nowrap; }     /* 梱包 */
+.items-table th:nth-child(6), .items-table td:nth-child(6) { width: 60px;  white-space: nowrap; }     /* 出力先 */
+.items-table th:nth-child(7), .items-table td:nth-child(7) { width: 48px;  text-align: center; }      /* マッチ */
+.items-table th:nth-child(8), .items-table td:nth-child(8) { width: 32px; }                            /* 削除 */
 
 .footer-bar {
     margin: 0 24px 16px; padding: 12px 16px; background: white; border-radius: 8px;
