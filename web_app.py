@@ -2889,6 +2889,40 @@ const DDC_REMARKS_RULES = [
     { ddcCode: '880', requiresOutput: 'シルビア', text: '運送NO.をご案内ください。' },
 ];
 
+// ─── 二重梱包 不可 DDC ───
+// この納品先コードに対しては二重梱包ボタンを無効化し、強制的に「通常」固定にする
+const NO_DOUBLE_PACK_DDC_CODES = [
+    '976', // 北海道江別物流C（伊藤忠商事日本アクセス）
+    '977', // ドンキ仙台港PDC（伊藤忠商事日本アクセス）
+    '978', // ドンキ浦和預けC（伊藤忠商事日本アクセス）
+    '979', // ドンキ加須預けC（伊藤忠商事日本アクセス）
+    '980', // PPIH中部共配C（伊藤忠商事日本アクセス）
+    '981', // PPIH山静共配C（日本アクセス）
+    '982', // PPIH北陸共配C（伊藤忠商事日本アクセス）
+    '983', // ドンキ泉北PDC（伊藤忠商事日本アクセス）
+];
+
+function isNoDoublePackPage(pageIdx) {
+    const pr = pageResults[pageIdx];
+    if (!pr || !pr.ddc_match) return false;
+    const code = String(pr.ddc_match.nohinsaki_code || pr.ddc_match.code || '');
+    return NO_DOUBLE_PACK_DDC_CODES.includes(code);
+}
+
+function applyNoDoublePackRule(pageIdx) {
+    if (!isNoDoublePackPage(pageIdx)) return;
+    const pr = pageResults[pageIdx];
+    if (!pr || !pr.matched_items) return;
+    let changed = false;
+    pr.matched_items.forEach(it => {
+        if (it.double_pack) {
+            it.double_pack = false;
+            changed = true;
+        }
+    });
+    if (changed && pageIdx === currentPage) renderPage(currentPage);
+}
+
 function applyAutoRemarks(pageIdx) {
     const pr = pageResults[pageIdx];
     if (!pr || pr.error) return;
@@ -2916,6 +2950,8 @@ function showResults() {
     document.getElementById('uploadZone').style.display = 'none';
     // 備考自動入力（DDC + 出力先ルール）を全ページ適用
     (pageResults || []).forEach((_, i) => applyAutoRemarks(i));
+    // 二重梱包不可DDC ルールも全ページ適用
+    (pageResults || []).forEach((_, i) => applyNoDoublePackRule(i));
     renderPage(currentPage);
     updatePageNav();
     // Phase 4: 結果表示時に送料を自動計算
@@ -3008,8 +3044,22 @@ function renderPage(idx) {
         const cls = it.matched ? 'matched' : 'unmatched';
         const name = it.matched ? it.master_name : it.ocr_name;
         const matchBadge = it.matched ? '<span class="badge badge-ok">OK</span>' : '<span class="badge badge-ng">NG</span>';
+        // 二重梱包 不可DDCなら強制リセット + ボタン無効化
+        const dpDisabled = isNoDoublePackPage(idx);
+        if (dpDisabled) it.double_pack = false;
         const dpChecked = it.double_pack ? 'checked' : '';
-        const dpStyle = it.double_pack ? 'background:#E65100;color:#fff;' : 'background:#eee;color:#999;';
+        let dpStyle, dpLabel, dpTitle, dpAttr;
+        if (dpDisabled) {
+            dpStyle = 'background:#ccc;color:#666;cursor:not-allowed;text-decoration:line-through;';
+            dpLabel = '不可';
+            dpTitle = 'この納品先(DDC)は二重梱包不可です';
+            dpAttr = 'disabled';
+        } else {
+            dpStyle = it.double_pack ? 'background:#E65100;color:#fff;' : 'background:#eee;color:#999;';
+            dpLabel = it.double_pack ? '二重梱包' : '通常';
+            dpTitle = '';
+            dpAttr = '';
+        }
         // 商品プルダウン生成
         let prodOptions = `<option value="">-- 選択 --</option>`;
         for (const pm of productMaster) {
@@ -3021,7 +3071,7 @@ function renderPage(idx) {
             <td>${it.jan || ''}</td>
             <td><input type="number" value="${it.quantity || 0}" min="0" data-page="${idx}" data-item="${i}" onchange="updateQty(this)" style="width:60px"></td>
             <td><input type="date" value="${it.expiry_date}" data-page="${idx}" data-item="${i}" onchange="updateExpiry(this)" style="width:140px;font-size:14px"></td>
-            <td><button onclick="toggleDoublePack(${idx},${i},this)" style="border:none;border-radius:4px;padding:5px 10px;font-size:13px;cursor:pointer;${dpStyle}" id="dpBtn-${idx}-${i}">${it.double_pack ? '二重梱包' : '通常'}</button></td>
+            <td><button onclick="toggleDoublePack(${idx},${i},this)" ${dpAttr} title="${dpTitle}" style="border:none;border-radius:4px;padding:5px 10px;font-size:13px;cursor:pointer;${dpStyle}" id="dpBtn-${idx}-${i}">${dpLabel}</button></td>
             <td>${it.output_dest || ''}</td>
             <td>${matchBadge}</td>
             <td><button onclick="removeProductRow(${idx},${i})" style="background:#d32f2f;color:#fff;border:none;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:12px">✕</button></td>
@@ -3152,6 +3202,7 @@ function selectDdc(pageIdx, name) {
         const badge = document.getElementById(`ddcBadge-${pageIdx}`);
         if (badge) { badge.className = 'badge badge-ok'; badge.textContent = 'OK'; }
         applyAutoRemarks(pageIdx);
+        applyNoDoublePackRule(pageIdx);
         recalculateShipping();
     }
 }
@@ -3258,6 +3309,7 @@ function updateExpiry(el) {
     }
 }
 function toggleDoublePack(pageIdx, itemIdx, btn) {
+    if (isNoDoublePackPage(pageIdx)) return;  // 不可DDCでは無視
     const item = pageResults[pageIdx].matched_items[itemIdx];
     item.double_pack = !item.double_pack;
     if (item.double_pack) {
