@@ -909,6 +909,11 @@ def api_confirm():
                             mi["expiry_date"] = ui["expiry_date"]
                         if "double_pack" in ui:
                             mi["double_pack"] = ui["double_pack"]
+                        # 出荷経路 (direct/warehouse) と手動上書きフラグ
+                        if "shipping_route" in ui:
+                            mi["shipping_route"] = ui["shipping_route"]
+                        if "route_user_override" in ui:
+                            mi["route_user_override"] = bool(ui["route_user_override"])
                         new_items.append(mi)
                     r["matched_items"] = new_items
                 # Update delivery date
@@ -991,6 +996,29 @@ def api_confirm():
             r["shipping_fee"] = page_fee
             total_all_pages += page_fee
             per_page_results.append(shipping_result)
+
+            # 出荷経路 (shipping_route) を確定する:
+            # - route_user_override=True の item はフロントの値を尊重
+            # - それ以外は jans_lot_break と output_dest から自動判定
+            jans_lb = shipping_result.get("jans_lot_break") or {}
+            for it in r.get("matched_items", []):
+                if it.get("route_user_override"):
+                    continue
+                output_dest = (it.get("output_dest") or "").strip()
+                jan = (it.get("jan") or "").strip()
+                if output_dest == "自社倉庫":
+                    it["shipping_route"] = "warehouse"
+                elif output_dest in ("ハルナ", "シルビア"):
+                    is_lb = jans_lb.get(jan)
+                    if is_lb is True:
+                        it["shipping_route"] = "warehouse"
+                    elif is_lb is False:
+                        it["shipping_route"] = "direct"
+                    else:
+                        # 送料計算対象外 → 安全側で direct
+                        it["shipping_route"] = "direct"
+                else:
+                    it["shipping_route"] = "warehouse"
 
             # lot_break_history.csv へ追記（2Snack の自動計算分のみ、ページ毎に1回）
             for g in shipping_result.get("groups", []):
@@ -2554,6 +2582,8 @@ async function recalculateShipping() {
         });
         const data = await res.json();
         lastShippingResults = data;
+        // 出荷経路(shipping_route)を各itemに自動セット（手動上書きは保護）
+        applyShippingRouteAuto();
         renderShippingPanel(data);
     } catch (err) {
         console.error('送料計算エラー:', err);
@@ -2923,6 +2953,56 @@ function applyNoDoublePackRule(pageIdx) {
     if (changed && pageIdx === currentPage) renderPage(currentPage);
 }
 
+// ─── 出荷経路 (shipping_route: "direct"/"warehouse") 自動判定 ───
+// shipping_fee_calculator の jans_lot_break を見て各 item の経路を決定。
+// ユーザーが手動で上書きしていれば（route_user_override=true）保護。
+function applyShippingRouteAuto() {
+    if (!lastShippingResults || !pageResults) return;
+    const pages = lastShippingResults.pages || [];
+    let needsRerender = false;
+    pageResults.forEach((pr, pageIdx) => {
+        if (!pr || pr.error) return;
+        const page = pages[pageIdx] || {};
+        const jansLB = page.jans_lot_break || {};
+        (pr.matched_items || []).forEach(it => {
+            if (it.route_user_override) return;  // 手動上書き保護
+            const outputDest = it.output_dest || '';
+            let route;
+            if (outputDest === '自社倉庫') {
+                route = 'warehouse';
+            } else if (outputDest === 'ハルナ' || outputDest === 'シルビア') {
+                const jan = it.jan || '';
+                const isLotBreak = jansLB[jan];
+                if (isLotBreak === undefined) {
+                    // 送料計算の対象外（マスタ未登録brand 等） → 安全側で direct
+                    route = 'direct';
+                } else {
+                    route = isLotBreak ? 'warehouse' : 'direct';
+                }
+            } else {
+                route = 'warehouse';  // 不明な output_dest は warehouse 扱い
+            }
+            if (it.shipping_route !== route) {
+                it.shipping_route = route;
+                needsRerender = true;
+            }
+        });
+    });
+    if (needsRerender) renderPage(currentPage);
+}
+
+// ユーザーが手動で経路を切り替える
+function toggleShippingRoute(pageIdx, itemIdx) {
+    const it = pageResults[pageIdx] && pageResults[pageIdx].matched_items[itemIdx];
+    if (!it) return;
+    const outputDest = it.output_dest || '';
+    // 出力先=自社倉庫の商品は経路切替できない（常に warehouse）
+    if (outputDest === '自社倉庫') return;
+    it.shipping_route = (it.shipping_route === 'direct') ? 'warehouse' : 'direct';
+    it.route_user_override = true;
+    renderPage(pageIdx);
+}
+
 function applyAutoRemarks(pageIdx) {
     const pr = pageResults[pageIdx];
     if (!pr || pr.error) return;
@@ -3072,7 +3152,23 @@ function renderPage(idx) {
             <td><input type="number" value="${it.quantity || 0}" min="0" data-page="${idx}" data-item="${i}" onchange="updateQty(this)" style="width:60px"></td>
             <td><input type="date" value="${it.expiry_date}" data-page="${idx}" data-item="${i}" onchange="updateExpiry(this)" style="width:140px;font-size:14px"></td>
             <td><button onclick="toggleDoublePack(${idx},${i},this)" ${dpAttr} title="${dpTitle}" style="border:none;border-radius:4px;padding:5px 10px;font-size:13px;cursor:pointer;${dpStyle}" id="dpBtn-${idx}-${i}">${dpLabel}</button></td>
-            <td>${it.output_dest || ''}</td>
+            ${(() => {
+                const od = it.output_dest || '';
+                if (!od) return '<td></td>';
+                if (od === '自社倉庫') {
+                    return `<td style="font-size:11px;line-height:1.3;"><div>${od}</div><div style="color:#888;">倉庫経由</div></td>`;
+                }
+                const route = it.shipping_route || 'direct';
+                const routeLabel = route === 'direct' ? '直送' : '倉庫経由';
+                const routeColor = route === 'direct' ? '#2d7a2d' : '#c66';
+                const overrideMark = it.route_user_override ? ' ✏️' : '';
+                return `<td style="font-size:11px;line-height:1.3;">
+                    <div>${od}</div>
+                    <button onclick="toggleShippingRoute(${idx},${i})"
+                            title="クリックで直送⇄倉庫経由を切替"
+                            style="border:1px solid ${routeColor};background:transparent;color:${routeColor};border-radius:3px;padding:0 4px;font-size:10px;cursor:pointer;">${routeLabel}${overrideMark}</button>
+                </td>`;
+            })()}
             <td>${matchBadge}</td>
             <td><button onclick="removeProductRow(${idx},${i})" style="background:#d32f2f;color:#fff;border:none;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:12px">✕</button></td>
         </tr>`;
@@ -3292,6 +3388,9 @@ function updateProduct(el) {
         }
         // 賞味期限: メモリから自動適用させるためリセット
         delete item.expiry_date;
+        // 商品変更により output_dest が変わったので、経路の手動上書きをクリア
+        // （次の recalculateShipping → applyShippingRouteAuto で再計算される）
+        delete item.route_user_override;
     }
     applyAutoRemarks(idx);
     renderPage(idx);
@@ -3327,6 +3426,26 @@ function toggleDoublePack(pageIdx, itemIdx, btn) {
 async function doConfirm() {
     const btn = document.getElementById('confirmBtn');
 
+    // 未マッチDDC があれば警告（住所がCSVに反映されないため）
+    // 自社倉庫向け(ベルーナ) や warehouse_direct=true のページは除外
+    const unmatchedPages = [];
+    (pageResults || []).forEach((pr, i) => {
+        if (!pr || pr.error) return;
+        if (pr.warehouse_direct) return;  // ベルーナ自社倉庫向けは除外
+        const dm = pr.ddc_match || {};
+        if (!dm.matched) {
+            unmatchedPages.push(`P.${i + 1} (${(pr.ocr_raw && pr.ocr_raw.delivery_dest) || '納品先不明'})`);
+        }
+    });
+    if (unmatchedPages.length > 0) {
+        const msg = '⚠️ 以下のページで納品先(DDC)が未マッチです:\n\n'
+                  + unmatchedPages.join('\n')
+                  + '\n\nこのまま確定すると、NE/COOLA CSV の住所・郵便番号・電話番号が空欄になります。\n'
+                  + '候補から正しい納品先を選び直してから確定するのを推奨します。\n\n'
+                  + 'このまま確定しますか？';
+        if (!confirm(msg)) return;
+    }
+
     // Phase 4: 再確定（confirmation_count > 0）の場合は警告ダイアログ
     if (draftMode && (draftMode.draft_confirmation_count || 0) > 0) {
         const lastAt = (draftMode.draft_confirmed_at || '').replace('T', ' ').substring(0, 16);
@@ -3356,6 +3475,8 @@ async function doConfirm() {
             output_dest: it.output_dest || '', case_quantity: it.case_quantity || 0,
             cs_price: it.cs_price || 0, spec: it.spec || '', pack: it.pack || '',
             unit_price: it.unit_price || 0, matched: it.matched || false,
+            shipping_route: it.shipping_route || '',
+            route_user_override: !!it.route_user_override,
         })),
     }));
 

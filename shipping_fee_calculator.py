@@ -409,12 +409,22 @@ def calculate_shipping_fee(items: list[dict], ddc_address: str = "",
 
         groups_result.append(group_data)
 
+    # jan → is_lot_break マップを生成（NE CSV 備考の出荷経路判定で使用）
+    jans_lot_break = {}
+    for g in groups_result:
+        is_lb = bool(g.get("is_lot_break"))
+        for it in g.get("items", []):
+            jan = it.get("jan")
+            if jan:
+                jans_lot_break[jan] = is_lb
+
     return {
         "total_fee": total_fee,
         "currency": "円(税抜)",
         "prefecture": prefecture,
         "zone": zone,
         "groups": groups_result,
+        "jans_lot_break": jans_lot_break,
         "needs_manual_input_overall": needs_manual_overall,
         "warnings": warnings,
     }

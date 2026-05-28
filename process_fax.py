@@ -657,9 +657,18 @@ def results_to_ne_csv(results, pdf_name):
             product_code = item.get("code", "")
             if not product_code:
                 raise ValueError(f"商品コード未登録: {product_name} (JAN:{jan})")
-            # 備考 = 出荷元（シルビア/ハルナ/自社倉庫）
+            # 備考 = 直送のハルナ・シルビアのみ表記。それ以外（自社倉庫・ロット割れ自社倉庫経由）は空欄
+            # shipping_route は web_app.py の確定処理時に各itemにセット済み
+            # （無い場合のフォールバック: output_dest=="自社倉庫" でなく shipping_route 未設定なら direct 扱い）
             output_dest = item.get("output_dest", "")
-            notes = output_dest
+            shipping_route = item.get("shipping_route", "")
+            if not shipping_route:
+                # フォールバック: shipping_route 未セット時
+                shipping_route = "warehouse" if output_dest == "自社倉庫" else "direct"
+            if shipping_route == "direct" and output_dest in ("ハルナ", "シルビア"):
+                notes = output_dest
+            else:
+                notes = ""
 
             row = {
                 "店舗伝票番号": order_no,
