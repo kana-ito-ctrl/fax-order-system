@@ -969,8 +969,11 @@ def results_to_coola_csv(results, pdf_name):
 
         # マッチ済み商品をグループに分類
         all_matched = [it for it in page_result.get("matched_items", []) if it.get("matched")]
-        # Phase 4: COOLA は自社倉庫出荷システムなので、直送商品（ハルナ/シルビア 10cs以上）は除外
-        # 同 output_dest の合計CS が 10以上 → 直送、未満 → ロット割れ自社倉庫経由（COOLA対象）
+        # Phase 4: COOLA は自社倉庫出荷システムなので、直送商品（ハルナ/シルビア ロット成立）は除外
+        # 判定優先順位:
+        #   1. item.shipping_route ("direct"/"warehouse") があればそれを尊重（ユーザー手動上書き含む）
+        #   2. 無ければ output_dest と brand別CS合計から旧ロジック（10cs以上→直送、未満→自社倉庫経由）
+        # ユーザーが「ロット成立だが倉庫経由にしたい」と手動切替したケースもCOOLAに含める
         from collections import defaultdict as _dd
         _cs_by_dest = _dd(int)
         for _it in all_matched:
@@ -979,6 +982,12 @@ def results_to_coola_csv(results, pdf_name):
             except (TypeError, ValueError):
                 pass
         def _is_direct_shipping(it):
+            route = (it.get("shipping_route") or "").strip()
+            if route == "warehouse":
+                return False  # 倉庫経由 → COOLA対象
+            if route == "direct":
+                return True   # 直送 → COOLA除外
+            # shipping_route 未設定の場合のフォールバック（旧ロジック）
             od = it.get("output_dest") or ""
             if od in ("シルビア", "ハルナ"):
                 return _cs_by_dest[od] >= 10
