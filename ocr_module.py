@@ -17,6 +17,8 @@ if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
     except Exception:
         pass
 
+import time
+
 import anthropic
 import pandas as pd
 from difflib import SequenceMatcher
@@ -234,45 +236,67 @@ def ocr_fax_page(image_b64, model="claude-sonnet-4-6"):
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=2000,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": image_b64
-                        }
-                    },
-                    {"type": "text", "text": OCR_PROMPT}
-                ]
-            }]
-        )
+    # 529 (Overloaded) / 503 / RateLimit を指数バックオフでリトライ
+    # 1s → 2s → 4s → 8s → 16s (最大5回試行)
+    max_attempts = 5
+    backoff_seconds = [1, 2, 4, 8, 16]
+    last_error = None
 
-        text = response.content[0].text.strip()
-        # Extract JSON from response
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0].strip()
-
-        return json.loads(text)
-
-    except json.JSONDecodeError:
-        return {"error": "JSON parse failed", "raw": text}
-    except UnicodeEncodeError as e:
-        return {"error": "Encoding error: " + repr(e)}
-    except Exception as e:
+    for attempt in range(max_attempts):
         try:
-            msg = repr(e)
-        except Exception:
-            msg = type(e).__name__
-        return {"error": "OCR error: " + msg}
+            response = client.messages.create(
+                model=model,
+                max_tokens=2000,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": image_b64
+                            }
+                        },
+                        {"type": "text", "text": OCR_PROMPT}
+                    ]
+                }]
+            )
+
+            text = response.content[0].text.strip()
+            # Extract JSON from response
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return {"error": "JSON parse failed", "raw": text}
+
+        except UnicodeEncodeError as e:
+            return {"error": "Encoding error: " + repr(e)}
+        except Exception as e:
+            last_error = e
+            status_code = getattr(e, "status_code", None)
+            is_retryable = (
+                status_code in (429, 503, 529)
+                or isinstance(e, getattr(anthropic, "APIConnectionError", tuple()))
+            )
+            if is_retryable and attempt < max_attempts - 1:
+                wait = backoff_seconds[attempt]
+                print(f"  [OCR retry] {type(e).__name__} status={status_code}, "
+                      f"{wait}秒待機して再試行 ({attempt + 1}/{max_attempts - 1})")
+                time.sleep(wait)
+                continue
+            break
+
+    try:
+        msg = repr(last_error)
+    except Exception:
+        msg = type(last_error).__name__ if last_error else "unknown"
+    return {"error": "OCR error: " + msg}
 
 
 def load_product_master():

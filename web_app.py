@@ -2919,6 +2919,74 @@ const DDC_REMARKS_RULES = [
     { ddcCode: '880', requiresOutput: 'シルビア', text: '運送NO.をご案内ください。' },
 ];
 
+// ─── 発注ロットアラートルール ───
+// 指定コード（納品先コード or 取引先コード）× 指定JAN の組み合わせで、数量(CS)が minCases 未満なら警告
+const LOT_ALERT_RULES = [
+    {
+        // 納品先コード（nohinsaki_code）でマッチ
+        codes: ['1192', '1193', '9022', '5001', '1218'],
+        jan: '4589570801485',
+        productLabel: '2Water Ceramide',
+        minCases: 48,
+    },
+];
+
+function getLotAlerts(pageIdx) {
+    const pr = pageResults[pageIdx];
+    if (!pr || pr.error) return [];
+    if (!pr.ddc_match) return [];
+    // 納品先コード・取引先コードどちらでも判定可
+    const codes = [
+        pr.ddc_match.nohinsaki_code,
+        pr.ddc_match.torihikisaki_code,
+        pr.ddc_match.code,
+    ].filter(Boolean).map(String);
+    if (!codes.length) return [];
+    const alerts = [];
+    for (const rule of LOT_ALERT_RULES) {
+        const matchDdc = rule.codes.some(c => codes.includes(c));
+        if (!matchDdc) continue;
+        const totalQty = (pr.matched_items || [])
+            .filter(it => String(it.jan || '') === rule.jan)
+            .reduce((sum, it) => sum + (Number(it.quantity) || 0), 0);
+        if (totalQty > 0 && totalQty < rule.minCases) {
+            alerts.push({
+                productLabel: rule.productLabel,
+                quantity: totalQty,
+                minCases: rule.minCases,
+            });
+        }
+    }
+    return alerts;
+}
+
+function renderLotAlertBannerHtml(pageIdx) {
+    const alerts = getLotAlerts(pageIdx);
+    if (!alerts.length) return '';
+    const items = alerts.map(a =>
+        `<div>⚠️ <b>${a.productLabel}</b> の発注ロット警告: 受注数 <b>${a.quantity}cs</b> （ルール: ${a.minCases}cs以上）</div>`
+    ).join('');
+    return `<div id="lotAlertBanner-${pageIdx}" style="background:#FFEBEE;border:2px solid #d32f2f;color:#b71c1c;padding:10px 14px;border-radius:6px;margin-bottom:10px;font-size:14px;font-weight:bold;line-height:1.5;">${items}</div>`;
+}
+
+function refreshLotAlertBanner(pageIdx) {
+    const el = document.getElementById(`lotAlertBanner-${pageIdx}`);
+    const html = renderLotAlertBannerHtml(pageIdx);
+    if (el) {
+        if (html) {
+            // 既存バナーを差し替え（外側divの中身を取り出す）
+            const tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            el.replaceWith(tmp.firstChild);
+        } else {
+            el.remove();
+        }
+    } else if (html) {
+        const panel = document.getElementById('rightPanel');
+        if (panel) panel.insertAdjacentHTML('afterbegin', html);
+    }
+}
+
 // ─── 二重梱包 不可 DDC ───
 // この納品先コードに対しては二重梱包ボタンを無効化し、強制的に「通常」固定にする
 const NO_DOUBLE_PACK_DDC_CODES = [
@@ -3175,6 +3243,7 @@ function renderPage(idx) {
     }
 
     panel.innerHTML = `
+    ${renderLotAlertBannerHtml(idx)}
     <div class="card">
         <h3>注文情報 <span class="badge ${badgeClass}" id="ddcBadge-${idx}">${status}</span></h3>
         <div class="field-grid">
@@ -3291,6 +3360,7 @@ function selectDdc(pageIdx, name) {
         pageResults[pageIdx].ddc_match.address = entry.address;
         pageResults[pageIdx].ddc_match.tel = entry.tel;
         pageResults[pageIdx].ddc_match.nohinsaki_code = entry.nohinsaki_code || '';
+        pageResults[pageIdx].ddc_match.torihikisaki_code = entry.torihikisaki_code || '';
         pageResults[pageIdx]._userDdc = name;
 
         document.getElementById(`ddcInfo-${pageIdx}`).textContent =
@@ -3299,6 +3369,7 @@ function selectDdc(pageIdx, name) {
         if (badge) { badge.className = 'badge badge-ok'; badge.textContent = 'OK'; }
         applyAutoRemarks(pageIdx);
         applyNoDoublePackRule(pageIdx);
+        refreshLotAlertBanner(pageIdx);
         recalculateShipping();
     }
 }
@@ -3334,6 +3405,7 @@ function updateQty(el) {
         const amtCell = document.querySelector(`.item-amount-${idx}-${itemIdx}`);
         if (amtCell) amtCell.textContent = '¥' + item.amount.toLocaleString();
     }
+    refreshLotAlertBanner(idx);
     recalculateShipping();
 }
 function editTwoOrderNo(el) {
