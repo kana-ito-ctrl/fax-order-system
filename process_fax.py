@@ -967,6 +967,11 @@ def results_to_coola_csv(results, pdf_name):
         # 住所分割
         pref, addr1, addr2, addr3 = _split_address(dest_address)
 
+        # BC列（コメント）: Amazon倉庫・自社倉庫向けは空欄、それ以外は21845
+        is_amazon = dest_name.startswith("Amazon.co.jp")
+        is_own_warehouse = bool(page_result.get("warehouse_direct"))
+        coola_comment = "" if (is_amazon or is_own_warehouse) else "21845"
+
         # マッチ済み商品をグループに分類
         all_matched = [it for it in page_result.get("matched_items", []) if it.get("matched")]
         # Phase 4: COOLA は自社倉庫出荷システムなので、直送商品（ハルナ/シルビア ロット成立）は除外
@@ -1098,6 +1103,7 @@ def results_to_coola_csv(results, pdf_name):
                     "購入者住所２": addr2,
                     "購入者住所３": addr3,
                     "購入者電話番号": dest_tel,
+                    "コメント": coola_comment,
                     "品名": product_name,
                     "形式/型番": product_code,
                     "受注数": quantity_bara,
