@@ -224,6 +224,18 @@ def api_bulk_csv_export():
         header = data_row["header"]
         items = data_row["items"]
 
+        # 確定時スナップショット (confirmation_history) から expiry_date / shipping_route /
+        # double_pack を JAN 単位で取り出す。fax_order_items_scm には保存されていないため。
+        snap_by_jan = {}
+        history = header.get("confirmation_history") or []
+        if history:
+            latest_snapshot = history[-1].get("snapshot") or {}
+            for snap_page in (latest_snapshot.get("pages") or []):
+                for snap_it in (snap_page.get("items") or []):
+                    snap_jan = str(snap_it.get("jan") or "").strip()
+                    if snap_jan:
+                        snap_by_jan[snap_jan] = snap_it
+
         matched_items = []
         for it in items:
             jan = str(it.get("jan_code") or "").strip()
@@ -235,6 +247,7 @@ def api_bulk_csv_export():
                 qty = int(float(it.get("quantity") or 0))
             except (TypeError, ValueError):
                 qty = 0
+            snap_it = snap_by_jan.get(jan, {})
             matched_items.append({
                 "jan": jan,
                 "code": it.get("product_code") or "",
@@ -250,6 +263,10 @@ def api_bulk_csv_export():
                 "case_quantity": case_qty,
                 "output_dest": output_dest,
                 "matched": bool(it.get("product_master_matched")),
+                # confirmation_history snapshot から補完（fax_order_items_scm に未保存）
+                "expiry_date": snap_it.get("expiry_date") or "",
+                "shipping_route": snap_it.get("shipping_route") or "",
+                "double_pack": bool(snap_it.get("double_pack")),
             })
 
         # DDC情報（住所・電話等）
@@ -1150,6 +1167,7 @@ def _build_confirmation_snapshot(results, staff_name, remarks, shipping_fee, two
                 "matched": bool(i.get("matched")),
                 "double_pack": bool(i.get("double_pack")),
                 "expiry_date": i.get("expiry_date"),
+                "shipping_route": i.get("shipping_route"),
             } for i in r.get("matched_items", [])],
         })
     return {
