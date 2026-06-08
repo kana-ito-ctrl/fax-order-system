@@ -1402,6 +1402,11 @@ PENDING_ORDERS_TEMPLATE = r"""<!DOCTYPE html>
              style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; font-size:13px; width:160px;">
     </label>
     <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#444;">
+      納品先
+      <input type="text" id="filterDest" oninput="applyFilter()" placeholder="例: 成城石井"
+             style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; font-size:13px; width:160px;">
+    </label>
+    <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#444;">
       納品日
       <input type="date" id="filterDeliveryDate" onchange="applyFilter()" oninput="applyFilter()"
              style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; font-size:13px;">
@@ -1464,6 +1469,7 @@ async function loadOrders(source, isReload) {
 // 検索バー: 取引先・納品日・伝票No でクライアント側フィルタ
 function applyFilter() {
   const partnerQ = (document.getElementById('filterPartner').value || '').toLowerCase().trim();
+  const destQ = (document.getElementById('filterDest').value || '').toLowerCase().trim();
   const dateQ = (document.getElementById('filterDeliveryDate').value || '').trim();
   const slipQ = (document.getElementById('filterSlip').value || '').toLowerCase().trim();
 
@@ -1471,6 +1477,10 @@ function applyFilter() {
     if (partnerQ) {
       const partner = (o.partner_name || '').toLowerCase();
       if (!partner.includes(partnerQ)) return false;
+    }
+    if (destQ) {
+      const dest = (o.delivery_location_name || '').toLowerCase();
+      if (!dest.includes(destQ)) return false;
     }
     if (dateQ) {
       if ((o.delivery_date || '') !== dateQ) return false;
@@ -1485,13 +1495,14 @@ function applyFilter() {
   renderTable();
   const totalText = currentOrders.length;
   const visibleText = filteredOrders.length;
-  const filterActive = partnerQ || dateQ || slipQ;
+  const filterActive = partnerQ || destQ || dateQ || slipQ;
   document.getElementById('summary').textContent =
     filterActive ? `${visibleText}件 / 全${totalText}件` : `${totalText}件`;
 }
 
 function clearFilters() {
   document.getElementById('filterPartner').value = '';
+  document.getElementById('filterDest').value = '';
   document.getElementById('filterDeliveryDate').value = '';
   document.getElementById('filterSlip').value = '';
   applyFilter();
@@ -1898,6 +1909,11 @@ CONFIRMED_ORDERS_TEMPLATE = r"""<!DOCTYPE html>
              style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; font-size:13px; width:160px;">
     </label>
     <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#444;">
+      納品先
+      <input type="text" id="filterDest" oninput="applyFilter()" placeholder="例: 成城石井"
+             style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; font-size:13px; width:160px;">
+    </label>
+    <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#444;">
       納品日
       <input type="date" id="filterDeliveryDate" onchange="applyFilter()" oninput="applyFilter()"
              style="padding:5px 8px; border:1px solid #ccc; border-radius:4px; font-size:13px;">
@@ -1961,6 +1977,7 @@ async function loadOrders(source, isReload) {
 // 検索バー: 取引先・納品日・伝票No でクライアント側フィルタ
 function applyFilter() {
   const partnerQ = (document.getElementById('filterPartner').value || '').toLowerCase().trim();
+  const destQ = (document.getElementById('filterDest').value || '').toLowerCase().trim();
   const dateQ = (document.getElementById('filterDeliveryDate').value || '').trim();
   const slipQ = (document.getElementById('filterSlip').value || '').toLowerCase().trim();
 
@@ -1968,6 +1985,10 @@ function applyFilter() {
     if (partnerQ) {
       const partner = (o.partner_name || '').toLowerCase();
       if (!partner.includes(partnerQ)) return false;
+    }
+    if (destQ) {
+      const dest = (o.delivery_location_name || '').toLowerCase();
+      if (!dest.includes(destQ)) return false;
     }
     if (dateQ) {
       // delivery_date は 'YYYY-MM-DD' 形式と仮定
@@ -1983,13 +2004,14 @@ function applyFilter() {
   renderTable();
   const totalText = currentOrders.length;
   const visibleText = filteredOrders.length;
-  const filterActive = partnerQ || dateQ || slipQ;
+  const filterActive = partnerQ || destQ || dateQ || slipQ;
   document.getElementById('summary').textContent =
     filterActive ? `${visibleText}件 / 全${totalText}件` : `${totalText}件`;
 }
 
 function clearFilters() {
   document.getElementById('filterPartner').value = '';
+  document.getElementById('filterDest').value = '';
   document.getElementById('filterDeliveryDate').value = '';
   document.getElementById('filterSlip').value = '';
   applyFilter();
