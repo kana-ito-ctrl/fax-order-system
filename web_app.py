@@ -3273,6 +3273,7 @@ function renderPage(idx) {
                    placeholder="納品先を入力して検索..." autocomplete="off"
                    oninput="filterDdc(${idx}, this.value)"
                    onfocus="filterDdc(${idx}, this.value)"
+                   onblur="onDdcBlur(${idx}, this)"
                    data-page="${idx}">
             <div class="ddc-dropdown" id="ddcDropdown-${idx}"></div>
         </div>
@@ -3341,6 +3342,34 @@ function highlightMatch(text, query) {
     const idx = text.toLowerCase().indexOf(query);
     if (idx < 0) return text;
     return text.substring(0, idx) + '<b style="color:#2F5496">' + text.substring(idx, idx + query.length) + '</b>' + text.substring(idx + query.length);
+}
+
+// DDC入力欄から離れた時、入力値がマスタ名と一致しなければ ddc_match をリセット。
+// （ユーザーが空欄にしたまま確定しようとすると未マッチDDC警告を出すため）
+// ドロップダウン候補のクリックより先に発火しないよう少し遅延させる。
+function onDdcBlur(pageIdx, el) {
+    setTimeout(() => {
+        const pr = pageResults[pageIdx];
+        if (!pr || !pr.ddc_match) return;
+        const inputVal = (el.value || '').trim();
+        const matchedName = (pr.ddc_match.name || '').trim();
+        if (inputVal && inputVal === matchedName) return;  // 一致 → 何もしない
+        // 空欄 or マスタ名と不一致: ddc_match をリセット
+        pr.ddc_match.matched = false;
+        pr.ddc_match.low_confidence = false;
+        pr.ddc_match.name = inputVal;
+        pr.ddc_match.address = '';
+        pr.ddc_match.tel = '';
+        pr.ddc_match.postal = '';
+        pr.ddc_match.nohinsaki_code = '';
+        pr.ddc_match.torihikisaki_code = '';
+        // UI を更新
+        const info = document.getElementById(`ddcInfo-${pageIdx}`);
+        if (info) info.textContent = '';
+        const badge = document.getElementById(`ddcBadge-${pageIdx}`);
+        if (badge) { badge.className = 'badge badge-ng'; badge.textContent = 'NG'; }
+        refreshLotAlertBanner(pageIdx);
+    }, 150);  // ドロップダウンのクリック処理を優先するための遅延
 }
 
 function selectDdc(pageIdx, name) {
