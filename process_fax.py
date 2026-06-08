@@ -670,6 +670,12 @@ def results_to_ne_csv(results, pdf_name):
             else:
                 notes = ""
 
+            # 賞味期限を備考に追加（運用上は自社倉庫出荷時のみ入力される想定）
+            expiry = (item.get("expiry_date") or "").strip()
+            if expiry:
+                expiry_text = f"賞味期限:{expiry.replace('-', '/')}"
+                notes = f"{notes} {expiry_text}" if notes else expiry_text
+
             row = {
                 "店舗伝票番号": order_no,
                 "受注日": order_date_str,
