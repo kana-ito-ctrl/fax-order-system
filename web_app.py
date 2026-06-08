@@ -3545,6 +3545,26 @@ function toggleDoublePack(pageIdx, itemIdx, btn) {
 async function doConfirm() {
     const btn = document.getElementById('confirmBtn');
 
+    // onblur の setTimeout 遅延に依存せず、確定直前に DDC input の現在値で
+    // ddc_match を強制同期する（空欄 or マスタ名と不一致なら matched=false）
+    (pageResults || []).forEach((pr, i) => {
+        if (!pr || pr.error || !pr.ddc_match) return;
+        const inputEl = document.getElementById(`ddcSearch-${i}`);
+        if (!inputEl) return;
+        const inputVal = (inputEl.value || '').trim();
+        const matchedName = (pr.ddc_match.name || '').trim();
+        if (!inputVal || inputVal !== matchedName) {
+            pr.ddc_match.matched = false;
+            pr.ddc_match.low_confidence = false;
+            pr.ddc_match.name = inputVal;
+            pr.ddc_match.address = '';
+            pr.ddc_match.tel = '';
+            pr.ddc_match.postal = '';
+            pr.ddc_match.nohinsaki_code = '';
+            pr.ddc_match.torihikisaki_code = '';
+        }
+    });
+
     // 未マッチDDC があれば警告（住所がCSVに反映されないため）
     // 自社倉庫向け(ベルーナ) や warehouse_direct=true のページは除外
     const unmatchedPages = [];
