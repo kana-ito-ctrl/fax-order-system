@@ -302,7 +302,7 @@ def api_bulk_csv_export():
                 def _short(s):
                     s = _re.sub(r'\s*\[[^\]]*\]\s*/\s*.*$', '', s)
                     s = _re.sub(r'\s*\[[^\]]*\]\s*$', '', s)
-                    s = _re.sub(r'\s*\([^)]*\)\s*$', '', s)  # 末尾 (DC) などの補足
+                    s = _re.sub(r'\s*[(（][^)）]*[)）]\s*$', '', s)  # 末尾 (DC) (DC) などの補足（半角・全角両対応）
                     return s.strip()
                 target_short = _short(target_name)
                 if target_short:
