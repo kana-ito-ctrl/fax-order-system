@@ -287,13 +287,26 @@ def api_bulk_csv_export():
                 ddc_row_idx = ddc_df[mask].index[0]
         # フォールバック: code が空 or マッチしない場合は納品先名で引く
         # （既存の confirmed データで delivery_location_code が NULL のものを救済）
+        # ddc_df の納品先名は Supabase版で "成城ドライ物流センター [1192]" 形式、
+        # 一方 header.delivery_location_name も同形式で保存されている前提でまず完全一致。
+        # ダメなら [コード]を除去した短縮版同士でも比較する（フォールバックのフォールバック）。
         if ddc_row_idx is None and ddc_match["name"] and ddc_df is not None and "納品先名" in ddc_df.columns:
-            import re as _re
-            clean_name = _re.sub(r'\s*\[[^\]]*\]\s*/\s*.*$', '', ddc_match["name"])
-            clean_name = _re.sub(r'\s*\[[^\]]*\]\s*$', '', clean_name).strip()
-            mask = ddc_df["納品先名"].astype(str).str.strip() == clean_name
+            target_name = ddc_match["name"].strip()
+            master_names = ddc_df["納品先名"].astype(str).str.strip()
+            mask = master_names == target_name
             if mask.any():
                 ddc_row_idx = ddc_df[mask].index[0]
+            else:
+                # 短縮版同士で比較: 末尾の "[XXX]" を除去
+                import re as _re
+                def _short(s):
+                    s = _re.sub(r'\s*\[[^\]]*\]\s*/\s*.*$', '', s)
+                    return _re.sub(r'\s*\[[^\]]*\]\s*$', '', s).strip()
+                target_short = _short(target_name)
+                if target_short:
+                    short_mask = master_names.map(_short) == target_short
+                    if short_mask.any():
+                        ddc_row_idx = ddc_df[short_mask].index[0]
         if ddc_row_idx is not None:
             full_ddc = _ddc_row_to_dict(ddc_df.loc[ddc_row_idx])
             for k in ("postal", "address", "tel", "fax", "time", "berse",
