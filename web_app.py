@@ -297,16 +297,23 @@ def api_bulk_csv_export():
             if mask.any():
                 ddc_row_idx = ddc_df[mask].index[0]
             else:
-                # 短縮版同士で比較: 末尾の "[XXX]" を除去
+                # 短縮版同士で比較: 末尾の "[XXX]" や " / 住所" や "(DC)" 等を除去
                 import re as _re
                 def _short(s):
                     s = _re.sub(r'\s*\[[^\]]*\]\s*/\s*.*$', '', s)
-                    return _re.sub(r'\s*\[[^\]]*\]\s*$', '', s).strip()
+                    s = _re.sub(r'\s*\[[^\]]*\]\s*$', '', s)
+                    s = _re.sub(r'\s*\([^)]*\)\s*$', '', s)  # 末尾 (DC) などの補足
+                    return s.strip()
                 target_short = _short(target_name)
                 if target_short:
                     short_mask = master_names.map(_short) == target_short
                     if short_mask.any():
                         ddc_row_idx = ddc_df[short_mask].index[0]
+                    else:
+                        # それでもダメなら部分一致でユニーク採用
+                        contains_mask = master_names.map(_short).str.contains(_re.escape(target_short), na=False, regex=True)
+                        if contains_mask.sum() == 1:
+                            ddc_row_idx = ddc_df[contains_mask].index[0]
         if ddc_row_idx is not None:
             full_ddc = _ddc_row_to_dict(ddc_df.loc[ddc_row_idx])
             for k in ("postal", "address", "tel", "fax", "time", "berse",
