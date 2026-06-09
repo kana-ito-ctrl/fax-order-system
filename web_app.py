@@ -280,13 +280,25 @@ def api_bulk_csv_export():
             "time": "", "berse": "無", "palette": "", "jpr": "", "method": "",
         }
         nohinsaki_code = ddc_match["code"]
+        ddc_row_idx = None
         if nohinsaki_code and ddc_df is not None and "納品先コード" in ddc_df.columns:
             mask = ddc_df["納品先コード"].astype(str) == str(nohinsaki_code)
             if mask.any():
-                full_ddc = _ddc_row_to_dict(ddc_df[mask].iloc[0])
-                for k in ("postal", "address", "tel", "fax", "time", "berse",
-                          "palette", "jpr", "method"):
-                    ddc_match[k] = full_ddc.get(k, ddc_match.get(k, ""))
+                ddc_row_idx = ddc_df[mask].index[0]
+        # フォールバック: code が空 or マッチしない場合は納品先名で引く
+        # （既存の confirmed データで delivery_location_code が NULL のものを救済）
+        if ddc_row_idx is None and ddc_match["name"] and ddc_df is not None and "納品先名" in ddc_df.columns:
+            import re as _re
+            clean_name = _re.sub(r'\s*\[[^\]]*\]\s*/\s*.*$', '', ddc_match["name"])
+            clean_name = _re.sub(r'\s*\[[^\]]*\]\s*$', '', clean_name).strip()
+            mask = ddc_df["納品先名"].astype(str).str.strip() == clean_name
+            if mask.any():
+                ddc_row_idx = ddc_df[mask].index[0]
+        if ddc_row_idx is not None:
+            full_ddc = _ddc_row_to_dict(ddc_df.loc[ddc_row_idx])
+            for k in ("postal", "address", "tel", "fax", "time", "berse",
+                      "palette", "jpr", "method"):
+                ddc_match[k] = full_ddc.get(k, ddc_match.get(k, ""))
 
         ocr_raw = {
             "order_no": header.get("slip_number") or "",
@@ -1087,7 +1099,7 @@ def api_confirm():
                     "slip_number": ocr0.get("order_no") or None,
                     "delivery_date": ocr0.get("delivery_date") or None,
                     "partner_name": (ocr0.get("sender") or "")[:200] or None,
-                    "delivery_location_code": ddc0.get("code") if ddc0.get("matched") else None,
+                    "delivery_location_code": (ddc0.get("nohinsaki_code") or ddc0.get("code")) if ddc0.get("matched") else None,
                     "delivery_location_name": ddc0.get("name") if ddc0.get("matched") else None,
                     "delivery_location_address": ddc0.get("address") if ddc0.get("matched") else None,
                     "notes": ocr0.get("notes") or None,
@@ -3430,6 +3442,10 @@ function selectDdc(pageIdx, name) {
         pageResults[pageIdx].ddc_match.tel = entry.tel;
         pageResults[pageIdx].ddc_match.nohinsaki_code = entry.nohinsaki_code || '';
         pageResults[pageIdx].ddc_match.torihikisaki_code = entry.torihikisaki_code || '';
+        // code キーも同じ値でセット (Python 側の互換性のため)
+        pageResults[pageIdx].ddc_match.code = entry.nohinsaki_code || '';
+        // postal / tel も entry から復元（経路A経由のbulk_csv で参照される）
+        pageResults[pageIdx].ddc_match.postal = entry.postal || '';
         pageResults[pageIdx]._userDdc = name;
 
         document.getElementById(`ddcInfo-${pageIdx}`).textContent =
