@@ -177,6 +177,69 @@ def api_pending_order_detail(order_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/pending_pdf/<order_id>")
+def api_pending_pdf(order_id):
+    """保留中受注の元PDFを取得する（プレビュー用）。
+
+    fax_orders_scm.source_file_name から PDF を Drive の各フォルダで検索:
+    1. 処理済み (drive_processor が移動した正常完了分)
+    2. 新着 (未処理)
+    3. 過去　処理不要
+    4. エラー
+    """
+    from supabase_client import _supabase_get
+    rows = _supabase_get(
+        "fax_orders_scm",
+        f"id=eq.{order_id}&select=source_file_name,source_file_path,source_channel"
+    )
+    if not rows:
+        return "Not found", 404
+    row = rows[0]
+    file_name = row.get("source_file_name") or ""
+    if not file_name:
+        return "No source file (manual entry?)", 404
+
+    DRIVE_BASE = r"G:\共有ドライブ\TWO\SCM\31_受発注確認\受注受信\_自動取込"
+    search_folders = ["処理済み", "新着", "過去　処理不要", "エラー"]
+    for folder in search_folders:
+        path = os.path.join(DRIVE_BASE, folder, file_name)
+        if os.path.exists(path):
+            mt = "application/pdf" if file_name.lower().endswith(".pdf") else "text/csv"
+            return send_file(path, mimetype=mt)
+
+    src_path = row.get("source_file_path") or ""
+    if src_path and os.path.exists(src_path):
+        mt = "application/pdf" if file_name.lower().endswith(".pdf") else "text/csv"
+        return send_file(src_path, mimetype=mt)
+
+    return f"PDF/CSV not found: {file_name}", 404
+
+
+@app.route("/api/pending_orders/<order_id>", methods=["DELETE"])
+def api_pending_order_delete(order_id):
+    """保留中受注を削除する。fax_order_items_scm も CASCADE で連動削除される。
+
+    二重取込時の重複削除等に使用。誤削除防止のため client 側で警告ダイアログを必須とする。
+    """
+    import urllib.request
+    import urllib.error
+    from supabase_client import SUPABASE_URL, SUPABASE_KEY
+    url = f"{SUPABASE_URL}/rest/v1/fax_orders_scm?id=eq.{order_id}"
+    req = urllib.request.Request(url, headers={
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Prefer": "return=representation",
+    }, method="DELETE")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return jsonify({"success": True, "status": resp.status})
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        return jsonify({"error": f"DELETE失敗 ({e.code}): {body[:200]}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/ddc_list")
 def api_ddc_list():
     return jsonify(get_ddc_list())
@@ -497,6 +560,8 @@ def api_load_draft():
         "matched": bool(header.get("ddc_matched")),
         "name": header.get("delivery_location_name") or "",
         "code": header.get("delivery_location_code") or "",
+        "nohinsaki_code": header.get("delivery_location_code") or "",  # JS互換用
+        "torihikisaki_code": "",
         "address": header.get("delivery_location_address") or "",
         "candidates": header.get("ddc_match_candidates") or [],
         "postal": "", "tel": "", "fax": "",
@@ -504,17 +569,43 @@ def api_load_draft():
         "notes": "",
         "low_confidence": False,
     }
+    from ocr_module import _ddc_row_to_dict
+    ddc_df = get_ddc_master()
+    ddc_row_idx = None
     nohinsaki_code = ddc_match["code"]
-    if nohinsaki_code:
-        from ocr_module import _ddc_row_to_dict
-        ddc_df = get_ddc_master()
-        if ddc_df is not None and "納品先コード" in ddc_df.columns:
-            mask = ddc_df["納品先コード"].astype(str) == str(nohinsaki_code)
-            if mask.any():
-                full_ddc = _ddc_row_to_dict(ddc_df[mask].iloc[0])
-                for k in ("postal", "address", "tel", "fax", "time", "berse",
-                          "palette", "jpr", "method", "notes"):
-                    ddc_match[k] = full_ddc.get(k, ddc_match.get(k, ""))
+    if nohinsaki_code and ddc_df is not None and "納品先コード" in ddc_df.columns:
+        mask = ddc_df["納品先コード"].astype(str) == str(nohinsaki_code)
+        if mask.any():
+            ddc_row_idx = ddc_df[mask].index[0]
+    # フォールバック: code が空でも納品先名で引く（過去確定データの code=NULL を救済）
+    if ddc_row_idx is None and ddc_match["name"] and ddc_df is not None and "納品先名" in ddc_df.columns:
+        target_name = ddc_match["name"].strip()
+        master_names = ddc_df["納品先名"].astype(str).str.strip()
+        mask = master_names == target_name
+        if mask.any():
+            ddc_row_idx = ddc_df[mask].index[0]
+        else:
+            import re as _re
+            def _short(s):
+                s = _re.sub(r'\s*\[[^\]]*\]\s*/\s*.*$', '', s)
+                s = _re.sub(r'\s*\[[^\]]*\]\s*$', '', s)
+                s = _re.sub(r'\s*[((][^))]*[))]\s*$', '', s)
+                return s.strip()
+            target_short = _short(target_name)
+            if target_short:
+                short_mask = master_names.map(_short) == target_short
+                if short_mask.any():
+                    ddc_row_idx = ddc_df[short_mask].index[0]
+    if ddc_row_idx is not None:
+        full_ddc = _ddc_row_to_dict(ddc_df.loc[ddc_row_idx])
+        for k in ("postal", "address", "tel", "fax", "time", "berse",
+                  "palette", "jpr", "method", "notes"):
+            ddc_match[k] = full_ddc.get(k, ddc_match.get(k, ""))
+        # nohinsaki_code も埋め直す（fallback で見つかった場合の救済）
+        if not ddc_match["nohinsaki_code"]:
+            ddc_match["nohinsaki_code"] = full_ddc.get("nohinsaki_code", "")
+            ddc_match["code"] = ddc_match["nohinsaki_code"]
+        ddc_match["torihikisaki_code"] = full_ddc.get("torihikisaki_code", "")
 
     # OCR raw 復元（保存済み ocr_raw を優先、フィールドはヘッダーから補完）
     ocr_raw_stored = header.get("ocr_raw") or {}
@@ -1388,6 +1479,8 @@ PENDING_ORDERS_TEMPLATE = r"""<!DOCTYPE html>
   .badge-error { background: #FFEBEE; color: #C62828; }
   .flag { display: inline-block; padding: 1px 6px; background: #FFE0B2; color: #BF360C; border-radius: 3px; font-size: 11px; margin-right: 4px; }
   .empty { text-align: center; padding: 40px; color: #888; }
+  .del-btn { background: #d32f2f; color: #fff; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 14px; }
+  .del-btn:hover { background: #b71c1c; }
   .loading { text-align: center; padding: 40px; color: #666; }
 
   /* 詳細パネル */
@@ -1558,6 +1651,7 @@ function renderTable() {
     const total = o.grand_total != null ? Number(o.grand_total).toLocaleString() + '円' : '-';
     const partner = (o.partner_name || '').substring(0, 24);
     const dest = (o.delivery_location_name || '').substring(0, 30);
+    const delBtn = `<button class="del-btn" onclick="event.stopPropagation(); deletePendingOrder('${o.id}', '${(o.slip_number || '').replace(/'/g, "\\'")}', '${(o.partner_name || '').replace(/'/g, "\\'").substring(0, 30)}', '${(o.delivery_location_name || '').replace(/'/g, "\\'").substring(0, 30)}')" title="この受注を削除">🗑️</button>`;
     return `<tr onclick="showDetail('${o.id}', this)" data-id="${o.id}">
       <td>${channelBadge}</td>
       <td>${o.slip_number || '-'}</td>
@@ -1568,6 +1662,7 @@ function renderTable() {
       <td>${total}</td>
       <td>${statusBadge} ${flags}</td>
       <td style="font-size:11px;color:#888">${(o.created_at || '').substring(0, 16).replace('T', ' ')}</td>
+      <td>${delBtn}</td>
     </tr>`;
   }).join('');
 
@@ -1576,11 +1671,43 @@ function renderTable() {
       <thead>
         <tr>
           <th>経路</th><th>伝票No</th><th>納品日</th><th>取引先</th><th>納品先(DDC)</th>
-          <th>倉庫</th><th>合計</th><th>状態</th><th>登録日時</th>
+          <th>倉庫</th><th>合計</th><th>状態</th><th>登録日時</th><th>操作</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
+}
+
+async function deletePendingOrder(orderId, slipNumber, partnerName, destName) {
+  const msg =
+    '⚠️ この保留中受注を削除します ⚠️\n\n' +
+    `伝票No: ${slipNumber || '(なし)'}\n` +
+    `取引先: ${partnerName || '(なし)'}\n` +
+    `納品先: ${destName || '(なし)'}\n\n` +
+    '【削除後の挙動】\n' +
+    '・Supabase fax_orders_scm から完全削除されます（明細も連動削除）\n' +
+    '・元のPDF/CSVは Drive 「処理済み」フォルダに残ります（必要なら再取込可能）\n' +
+    '・この操作は取り消せません\n\n' +
+    '本当に削除しますか？';
+  if (!confirm(msg)) return;
+  // 二段階確認（誤削除防止）
+  if (!confirm('もう一度確認: 本当にこの受注を削除しますか？')) return;
+  try {
+    const res = await fetch(`/api/pending_orders/${orderId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      alert('削除失敗: ' + (data.error || ('HTTP ' + res.status)));
+      return;
+    }
+    alert(`✅ 受注を削除しました (伝票No: ${slipNumber || '(なし)'})`);
+    if (typeof loadOrders === 'function') {
+      loadOrders(currentChannelFilter || 'all');
+    } else {
+      location.reload();
+    }
+  } catch (err) {
+    alert('エラー: ' + err.message);
+  }
 }
 
 async function showDetail(orderId, rowEl) {
@@ -1675,6 +1802,18 @@ function renderDetail(data) {
         ${kv('OCRページ', h.ocr_page_no)}
       </div>
     </div>
+
+    ${h.source_file_name ? `
+    <div class="detail-section">
+      <h3>📄 発注書原本プレビュー</h3>
+      <iframe src="/api/pending_pdf/${h.id}"
+              style="width:100%; height:600px; border:1px solid #ccc; border-radius:4px; background:#f5f5f5"
+              title="発注書原本"></iframe>
+      <div style="font-size:11px;color:#888;margin-top:6px">
+        表示されない場合は <a href="/api/pending_pdf/${h.id}" target="_blank">別タブで開く</a>
+      </div>
+    </div>
+    ` : ''}
 
     <div style="font-size:11px;color:#999;margin-top:20px">
       ID: ${h.id}<br>
@@ -2067,7 +2206,8 @@ function renderTable() {
     const total = o.grand_total != null ? Number(o.grand_total).toLocaleString() + '円' : '-';
     const partner = (o.partner_name || '').substring(0, 24);
     const dest = (o.delivery_location_name || '').substring(0, 30);
-    const ddc = o.ddc_matched ? '✅' : '❌';
+    // 確定済み一覧では DDC は基本マッチ済み前提で ☑ 固定（万一未マッチで確定された場合は ⚠️）
+    const ddc = o.ddc_matched ? '✅' : '⚠️';
     const ship = o.shipping_fee_two_burden
       ? '<span style="color:#888">TWO負担</span>'
       : (o.shipping_fee != null ? `¥${Number(o.shipping_fee).toLocaleString()}` : '-');
@@ -2166,7 +2306,7 @@ function renderDetail(data) {
         ${kv('取引先', h.partner_name)}
         ${kv('納品先', h.delivery_location_name)}
         ${kv('住所', h.delivery_location_address)}
-        ${kv('DDCマッチ', h.ddc_matched ? '✅ マッチ' : '❌ 未マッチ')}
+        ${kv('DDCマッチ', h.ddc_matched ? '✅ マッチ' : '⚠️ 未マッチで確定')}
         ${kv('倉庫', h.warehouse)}
         ${kv('出荷区分', h.shipping_type)}
         ${kv('合計金額', h.grand_total != null ? Number(h.grand_total).toLocaleString() + '円' : '')}
@@ -2554,8 +2694,21 @@ body { font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif; background
 let sessionId = null;
 let pageResults = [];
 let currentPage = 0;
-// 商品名→賞味期限のメモリ（セッション中保持、ロット切替時は手動変更可）
-const expiryMemory = {};
+// 商品名→賞味期限のメモリ（localStorageで永続化。タブ間でも共有される）
+const EXPIRY_MEMORY_KEY = 'fax_expiry_memory_v1';
+const expiryMemory = (() => {
+    try {
+        const json = localStorage.getItem(EXPIRY_MEMORY_KEY);
+        return json ? JSON.parse(json) : {};
+    } catch (e) {
+        return {};
+    }
+})();
+function saveExpiryMemory() {
+    try {
+        localStorage.setItem(EXPIRY_MEMORY_KEY, JSON.stringify(expiryMemory));
+    } catch (e) {}
+}
 // 商品マスタリスト（プルダウン用）
 let productMaster = [];
 let ddcMaster = [];
@@ -3081,7 +3234,12 @@ const NO_DOUBLE_PACK_DDC_CODES = [
 function isNoDoublePackPage(pageIdx) {
     const pr = pageResults[pageIdx];
     if (!pr || !pr.ddc_match) return false;
-    const code = String(pr.ddc_match.nohinsaki_code || pr.ddc_match.code || '');
+    let code = String(pr.ddc_match.nohinsaki_code || pr.ddc_match.code || '');
+    // フォールバック: code が空なら ddcMaster から name で引き直す
+    if (!code && pr.ddc_match.name) {
+        const entry = ddcMaster.find(d => d.name === pr.ddc_match.name);
+        if (entry) code = String(entry.nohinsaki_code || '');
+    }
     return NO_DOUBLE_PACK_DDC_CODES.includes(code);
 }
 
@@ -3588,6 +3746,7 @@ function updateExpiry(el) {
     const name = item.master_name || item.ocr_name;
     if (name && el.value) {
         expiryMemory[name] = el.value;
+        saveExpiryMemory();
     }
 }
 function toggleDoublePack(pageIdx, itemIdx, btn) {
