@@ -2292,8 +2292,14 @@ async function bulkExport(csvType) {
       alert('生成失敗: ' + (data.error || ('HTTP ' + res.status)));
       return;
     }
-    // ダウンロード（新規タブで開く）
-    window.open(data.url, '_blank');
+    // ダウンロード（<a> タグの click() でポップアップブロックを回避）
+    const dlA = document.createElement('a');
+    dlA.href = data.url;
+    if (data.filename) dlA.download = data.filename;
+    dlA.style.display = 'none';
+    document.body.appendChild(dlA);
+    dlA.click();
+    setTimeout(() => document.body.removeChild(dlA), 1000);
     let msg = `✅ ${csvType.toUpperCase()} CSV を生成しました（${data.processed}件）`;
     if (data.skipped) msg += ` / スキップ ${data.skipped}件`;
     setTimeout(() => alert(msg), 200);
