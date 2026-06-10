@@ -1239,6 +1239,121 @@ def api_confirm():
             traceback.print_exc()
             print(f"[confirm] Supabase更新失敗: {ce}")
             # Supabase 更新失敗してもファイル生成は完了しているので 200 で返す（エラーフラグ付き）
+    else:
+        # 経路B (手動入力 / 手動アップロード): 各ページを fax_orders_scm に新規 INSERT して
+        # 即座に confirmed 状態にする。これで /confirmed に表示される。
+        try:
+            from supabase_client import insert_fax_order, confirm_fax_order
+            from datetime import datetime as _dt
+
+            source = sess.get("source") or "manual"
+            snapshot = _build_confirmation_snapshot(results, staff_name, remarks,
+                                                    shipping_fee_total, shipping_fee_two_burden)
+
+            # ページ毎の送料を per_page_results から取得（取れなければ 1ページ目に全合計）
+            per_page_fees = {}
+            if shipping_fee_breakdown:
+                for idx, pp in enumerate(shipping_fee_breakdown.get("pages") or []):
+                    key = pp.get("page_index") if "page_index" in pp else pp.get("page", idx)
+                    per_page_fees[key] = pp.get("page_total_fee") or 0
+
+            def _to_iso_date(s):
+                if not s:
+                    return None
+                s = str(s).strip()
+                for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y年%m月%d日"):
+                    try:
+                        return _dt.strptime(s, fmt).strftime("%Y-%m-%d")
+                    except ValueError:
+                        continue
+                return None
+
+            inserted_count = 0
+            last_confirm = None
+            for page_idx, r in enumerate(results):
+                if "error" in r:
+                    continue
+                ocr = r.get("ocr_raw", {})
+                ddc = r.get("ddc_match", {})
+                ddc_matched = bool(ddc.get("matched"))
+
+                grand_total = 0.0
+                for it in r.get("matched_items", []):
+                    try:
+                        grand_total += float(it.get("amount") or 0)
+                    except (TypeError, ValueError):
+                        pass
+
+                header = {
+                    "slip_number": ocr.get("order_no") or None,
+                    "source_channel": source,
+                    "order_type": "wholesale",
+                    "status": "draft",  # INSERT後すぐ confirm_fax_order で 'confirmed' に
+                    "order_date": _dt.now().strftime("%Y-%m-%d"),
+                    "delivery_date": _to_iso_date(ocr.get("delivery_date")),
+                    "partner_name": (ocr.get("sender") or "")[:200] or None,
+                    "delivery_location_code": (ddc.get("nohinsaki_code") or ddc.get("code")) if ddc_matched else None,
+                    "delivery_location_name": ddc.get("name") if ddc_matched else (ocr.get("delivery_dest") or None),
+                    "delivery_location_address": ddc.get("address") if ddc_matched else None,
+                    "grand_total": grand_total if grand_total else None,
+                    "notes": ocr.get("notes") or None,
+                    "source_file_name": pdf_name,
+                    "ocr_page_no": r.get("page", page_idx + 1),
+                    "ocr_raw": ocr,
+                    "ddc_matched": ddc_matched,
+                    "warehouse": ddc.get("name") if r.get("warehouse_direct") else None,
+                }
+
+                items_payload = []
+                for idx, it in enumerate(r.get("matched_items", []), start=1):
+                    qty = it.get("quantity")
+                    try:
+                        qty = float(qty) if qty is not None else None
+                    except (TypeError, ValueError):
+                        qty = None
+                    items_payload.append({
+                        "line_no": idx,
+                        "product_code": it.get("code") or None,
+                        "product_name": it.get("master_name") or it.get("ocr_name") or None,
+                        "spec": it.get("spec") or None,
+                        "quantity": qty,
+                        "unit": it.get("unit") or "CS",
+                        "unit_price": it.get("cs_price") or it.get("unit_price") or None,
+                        "amount": it.get("amount") or None,
+                        "tax": 0,
+                        "subtotal": it.get("amount") or None,
+                        "tax_category": "",
+                        "tax_type": "外税",
+                        "jan_code": it.get("jan") or None,
+                        "product_master_matched": bool(it.get("matched")),
+                        "ocr_raw_name": it.get("ocr_name") or None,
+                    })
+
+                new_id = insert_fax_order(header, items_payload)
+                if new_id:
+                    page_fee = per_page_fees.get(page_idx,
+                                                 shipping_fee_total if page_idx == 0 else 0)
+                    last_confirm = confirm_fax_order(
+                        new_id,
+                        confirmed_by=staff_name,
+                        snapshot=snapshot,
+                        shipping_fee=page_fee,
+                        shipping_fee_two_burden=shipping_fee_two_burden,
+                        shipping_fee_breakdown=shipping_fee_breakdown if page_idx == 0 else None,
+                    )
+                    inserted_count += 1
+
+            if inserted_count > 0:
+                confirm_result = {
+                    "inserted_count": inserted_count,
+                    "confirmation_count": (last_confirm or {}).get("confirmation_count"),
+                }
+                print(f"[confirm-routeB] Supabase に {inserted_count} 件 INSERT + confirmed")
+        except Exception as ce:
+            import traceback
+            traceback.print_exc()
+            print(f"[confirm-routeB] Supabase保存失敗: {ce}")
+            # ファイル生成は完了しているので 200 で返す（経路Bは保存失敗してもCSV出力は完了）
 
     output_files = []
     if ne_csv_path:
