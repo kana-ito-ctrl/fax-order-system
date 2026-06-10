@@ -311,6 +311,15 @@ def api_bulk_csv_export():
             except (TypeError, ValueError):
                 qty = 0
             snap_it = snap_by_jan.get(jan, {})
+            # 編集モードで数量変更したケースに対応:
+            # confirm_fax_order は fax_order_items_scm を更新しないため、
+            # 最新の確定値は confirmation_history.snapshot 側にしかない
+            snap_qty = snap_it.get("quantity")
+            if snap_qty is not None and snap_qty != "":
+                try:
+                    qty = int(float(snap_qty))
+                except (TypeError, ValueError):
+                    pass
             matched_items.append({
                 "jan": jan,
                 "code": it.get("product_code") or "",
@@ -3361,34 +3370,45 @@ function updatePageNav() {
 
 function renderPage(idx) {
     const pr = pageResults[idx];
-    // Preview image (PALTAC CSV / 手入力 / ドラフト編集モードはプレビューなし)
+    // Preview image / iframe
     const previewImg = document.getElementById('previewImg');
     const previewContainer = previewImg.parentElement;
     let placeholder = document.getElementById('previewPlaceholder');
-    if (pr.source === 'paltac' || pr.source === 'infomart' || pr.source === 'manual' || pr.source === 'smacla' || draftMode) {
+    let draftIframe = document.getElementById('draftPdfIframe');
+
+    // いったん全部非表示
+    previewImg.style.display = 'none';
+    if (placeholder) placeholder.style.display = 'none';
+    if (draftIframe) draftIframe.style.display = 'none';
+
+    if (draftMode && draftMode.draft_id) {
+        // ドラフト編集モード: /api/pending_pdf/<draft_id> を iframe で表示
+        if (!draftIframe) {
+            draftIframe = document.createElement('iframe');
+            draftIframe.id = 'draftPdfIframe';
+            draftIframe.style.cssText = 'width:100%;height:100%;border:none;background:#f5f5f5';
+            previewContainer.appendChild(draftIframe);
+        }
+        draftIframe.src = `/api/pending_pdf/${draftMode.draft_id}`;
+        draftIframe.style.display = '';
+    } else if (pr.source === 'paltac' || pr.source === 'infomart' || pr.source === 'manual' || pr.source === 'smacla') {
+        // 手入力 / CSV 系: プレースホルダー
         previewImg.src = '';
-        previewImg.style.display = 'none';
-        // プレースホルダーメッセージを表示
         if (!placeholder) {
             placeholder = document.createElement('div');
             placeholder.id = 'previewPlaceholder';
             placeholder.style.cssText = 'color:#aaa;text-align:center;padding:40px 20px;font-size:13px;line-height:1.6;';
             previewContainer.appendChild(placeholder);
         }
-        let msg;
-        if (draftMode) {
-            msg = '📝 ドラフト編集モード<br><span style="font-size:11px">元PDF プレビューは非表示<br>(Supabase保存済みのデータを編集中)</span>';
-        } else if (pr.source === 'manual') {
-            msg = '✏️ 手入力モード<br><span style="font-size:11px">PDF元データなし</span>';
-        } else {
-            msg = '📊 CSV取込<br><span style="font-size:11px">PDF元データなし</span>';
-        }
+        const msg = pr.source === 'manual'
+            ? '✏️ 手入力モード<br><span style="font-size:11px">PDF元データなし</span>'
+            : '📊 CSV取込<br><span style="font-size:11px">PDF元データなし</span>';
         placeholder.innerHTML = msg;
         placeholder.style.display = '';
     } else {
+        // 通常: PDF→画像化したものを img で表示
         previewImg.style.display = '';
         previewImg.src = `/api/page_image/${sessionId}/${pr.page}`;
-        if (placeholder) placeholder.style.display = 'none';
     }
 
     const panel = document.getElementById('rightPanel');
