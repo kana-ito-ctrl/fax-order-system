@@ -43,6 +43,24 @@ from ocr_module import process_fax_pdf
 from pdf_generator import gen_sylvia_pdf, gen_haruna_pdf
 from shipping_judge import judge_shipping, judge_warehouse, check_lot_alert, check_lead_time_alert
 from supabase_client import insert_fax_order, check_fax_order_exists
+from drive_api_client import get_drive_client, LocalDriveClient, DriveFile
+
+# Drive クライアント（遅延ロード）+ ローカルパス→DriveFile のマップ
+_drive_client = None
+# 同一セッションで複数回 get_fax_files / move_to_* を呼ぶと干渉するので
+# get_fax_files 内で更新するマッピング
+_path_to_drive_file: dict = {}
+
+
+def drive_client():
+    global _drive_client
+    if _drive_client is None:
+        _drive_client = get_drive_client()
+    return _drive_client
+
+
+def is_api_mode() -> bool:
+    return not isinstance(drive_client(), LocalDriveClient)
 
 # ==================== フォルダ設定 ====================
 # 新フォルダ（2026-04〜）: GAS経由で自動取込。
@@ -78,59 +96,115 @@ ORDER_LIST_HEADERS = [
 
 
 def ensure_folders(mode: str = "new"):
-    """必要なフォルダを作成する
+    """必要なフォルダを作成する（ローカルモードのみ）。
+
+    API モードでは Drive 側のフォルダは既存前提（GAS が新着フォルダを使用中）。
+    出力ローカルフォルダのみ作成。
 
     Args:
         mode: "new" (新フォルダ構成) or "legacy" (旧構成)
     """
-    folders = [
-        OUTPUT_FOLDER,
-        os.path.dirname(ORDER_LIST_CSV),
-    ]
+    # 出力ローカルフォルダは常に作成
+    for folder in [OUTPUT_FOLDER, os.path.dirname(ORDER_LIST_CSV)]:
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError:
+            pass  # クラウド環境では作成不可な場合がある
+
+    # API モードでは Drive フォルダ作成不要
+    if is_api_mode():
+        return
+
     if mode == "legacy":
-        folders.extend([
+        folders = [
             os.path.join(LEGACY_INPUT_FOLDER, CORRECTED_SUBFOLDER),
             os.path.join(LEGACY_INPUT_FOLDER, PROCESSED_SUBFOLDER),
-        ])
+        ]
     else:
-        folders.extend([
-            NEW_INPUT_FOLDER,
-            NEW_PROCESSED_FOLDER,
-            NEW_ERROR_FOLDER,
-        ])
+        folders = [NEW_INPUT_FOLDER, NEW_PROCESSED_FOLDER, NEW_ERROR_FOLDER]
     for folder in folders:
-        os.makedirs(folder, exist_ok=True)
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError:
+            pass
 
 
 def get_fax_files(subfolder=None, days=None, limit=None, extensions=(".pdf", ".csv")):
-    """処理対象のファイル一覧を取得する（更新日時が古い順）
+    """処理対象のファイル一覧（ローカルパス）を返す。Drive API モード対応。
 
-    Args:
-        subfolder: サブフォルダ名（例: "修正済み"）
-        days: 直近N日以内のファイルのみ対象（例: 3）
-        limit: 最大件数（例: 20）
-        extensions: 拾う拡張子のタプル。デフォルトは PDF と CSV。
+    - ローカルモード: 共有ドライブのマウントパスをそのまま返す
+    - API モード: Drive から一時ディレクトリにダウンロードしたパスを返す
+                    （サイドカー .meta.json も同時にダウンロード）
+
+    既存呼び出し側は受け取ったパスをそのまま使えば動作する。
+    move_to_processed / move_to_error も同じパスで呼び出せば、内部で
+    対応する DriveFile を引いて適切な操作を行う。
     """
-    if subfolder:
-        target_folder = os.path.join(FAX_INPUT_FOLDER, subfolder)
-    else:
-        target_folder = FAX_INPUT_FOLDER
+    global _path_to_drive_file
+    _path_to_drive_file.clear()
 
-    if not os.path.exists(target_folder):
+    # subfolder（legacy "修正済み"）は当面 API 非対応。ローカルモードのみで動作
+    if subfolder:
+        if not is_api_mode():
+            target_folder = os.path.join(FAX_INPUT_FOLDER, subfolder)
+            return _get_fax_files_local_legacy(target_folder, days, limit, extensions)
+        # API モードでは subfolder 未対応 → 空返し
         return []
 
-    cutoff = None
-    if days is not None:
-        cutoff = time.time() - days * 86400
+    dc = drive_client()
+    drive_files = dc.list_files("new", extensions=extensions)
 
+    # .meta.json と一時ファイルは除外
+    drive_files = [
+        f for f in drive_files
+        if not f.name.lower().endswith('.meta.json') and not f.name.startswith('~')
+    ]
+
+    # days フィルタ
+    if days is not None:
+        cutoff_epoch = time.time() - days * 86400
+        def _is_recent(f):
+            mt = f.modified_time
+            if not mt:
+                return True
+            try:
+                if isinstance(dc, LocalDriveClient):
+                    return float(mt) >= cutoff_epoch
+                # API モードは ISO 8601
+                from datetime import datetime
+                dt = datetime.fromisoformat(mt.replace('Z', '+00:00'))
+                return dt.timestamp() >= cutoff_epoch
+            except Exception:
+                return True
+        drive_files = [f for f in drive_files if _is_recent(f)]
+
+    # 古い順
+    drive_files.sort(key=lambda f: f.modified_time)
+    if limit is not None:
+        drive_files = drive_files[-limit:]
+
+    # ローカルパスを返す（API モードでは一時dirにダウンロード）
+    paths = []
+    for df in drive_files:
+        if df.local_path:
+            local_path = df.local_path
+        else:
+            local_path = _materialize_drive_file_to_temp(df)
+        paths.append(local_path)
+        _path_to_drive_file[local_path] = df
+    return paths
+
+
+def _get_fax_files_local_legacy(target_folder, days, limit, extensions):
+    """旧フォルダ構成のローカル処理（legacy mode 用）"""
+    if not os.path.exists(target_folder):
+        return []
+    cutoff = time.time() - days * 86400 if days is not None else None
     files = []
     exts_lower = tuple(e.lower() for e in extensions)
     for f in os.listdir(target_folder):
         flower = f.lower()
-        # .meta.json は除外
-        if flower.endswith('.meta.json'):
-            continue
-        if flower.startswith('~'):
+        if flower.endswith('.meta.json') or flower.startswith('~'):
             continue
         if not flower.endswith(exts_lower):
             continue
@@ -140,13 +214,28 @@ def get_fax_files(subfolder=None, days=None, limit=None, extensions=(".pdf", ".c
         if cutoff is not None and os.path.getmtime(full_path) < cutoff:
             continue
         files.append(full_path)
-
     files.sort(key=lambda x: os.path.getmtime(x))
-
     if limit is not None:
-        files = files[-limit:]  # 最新N件
-
+        files = files[-limit:]
     return files
+
+
+def _materialize_drive_file_to_temp(df: DriveFile) -> str:
+    """DriveFile を一時ディレクトリにダウンロードしてパスを返す。
+    サイドカー .meta.json があれば同じディレクトリに置く。"""
+    import tempfile
+    dc = drive_client()
+    tmpdir = tempfile.mkdtemp(prefix="fax_dl_")
+    tmppath = os.path.join(tmpdir, df.name)
+    with open(tmppath, "wb") as f:
+        f.write(dc.download(df))
+    # サイドカーも一緒に
+    sidecar = dc.find_sidecar(df)
+    if sidecar:
+        sidecar_path = os.path.join(tmpdir, sidecar.name)
+        with open(sidecar_path, "wb") as f:
+            f.write(dc.download(sidecar))
+    return tmppath
 
 
 def init_order_list_csv():
@@ -181,8 +270,8 @@ def read_meta_json(pdf_path: str) -> dict:
         return {}
 
 
-def _move_pdf_with_meta(pdf_path: str, dest_folder: str) -> str:
-    """PDFと同名の .meta.json サイドカーも一緒に移動する。衝突時はタイムスタンプ付与。"""
+def _move_pdf_with_meta_local(pdf_path: str, dest_folder: str) -> str:
+    """ローカルフォルダ間で PDF と .meta.json サイドカーを移動。"""
     os.makedirs(dest_folder, exist_ok=True)
     base_name = os.path.basename(pdf_path)
     dest = os.path.join(dest_folder, base_name)
@@ -190,30 +279,72 @@ def _move_pdf_with_meta(pdf_path: str, dest_folder: str) -> str:
         name, ext = os.path.splitext(base_name)
         dest = os.path.join(dest_folder, f"{name}_{datetime.now().strftime('%H%M%S')}{ext}")
     shutil.move(pdf_path, dest)
-
-    # サイドカーも同じ命名規則で移動（存在すれば）
     meta_src = os.path.splitext(pdf_path)[0] + ".meta.json"
     if os.path.exists(meta_src):
         meta_dest = os.path.splitext(dest)[0] + ".meta.json"
         try:
             shutil.move(meta_src, meta_dest)
         except OSError:
-            pass  # サイドカー移動失敗は致命的ではない
+            pass
     return dest
 
 
+def _move_via_drive_api(pdf_path: str, dest_key: str) -> str:
+    """API モード: Drive API でファイル移動。pdf_path は一時ファイルなので削除。"""
+    df = _path_to_drive_file.get(pdf_path)
+    if df is None:
+        # フォールバック: pdf_path 名で Drive から探す
+        df_files = drive_client().list_files("new", extensions=(os.path.splitext(pdf_path)[1],))
+        df = next((f for f in df_files if f.name == os.path.basename(pdf_path)), None)
+        if df is None:
+            print(f"  [move] DriveFile が見つかりません: {pdf_path}")
+            return pdf_path
+
+    dc = drive_client()
+    sidecar = dc.find_sidecar(df)
+    dc.move(df, dest_key)
+    if sidecar:
+        try:
+            dc.move(sidecar, dest_key)
+        except Exception as e:
+            print(f"  [move] サイドカー移動失敗: {e}")
+
+    # 一時ローカルファイルを削除
+    try:
+        tmpdir = os.path.dirname(pdf_path)
+        if tmpdir.startswith(_tempfile_module().gettempdir()):
+            import shutil as _sh
+            _sh.rmtree(tmpdir, ignore_errors=True)
+    except Exception:
+        pass
+    return f"<drive://{dest_key}/{df.name}>"
+
+
+def _tempfile_module():
+    import tempfile
+    return tempfile
+
+
 def move_to_processed(pdf_path: str, mode: str = "new") -> str:
-    """処理済みPDFを処理済みフォルダへ移動する（.meta.json も一緒に）"""
+    """処理済みフォルダへ移動。ローカル/API 両対応。"""
+    if is_api_mode():
+        return _move_via_drive_api(pdf_path, "processed")
     if mode == "legacy":
         processed_folder = os.path.join(LEGACY_INPUT_FOLDER, PROCESSED_SUBFOLDER)
     else:
         processed_folder = NEW_PROCESSED_FOLDER
-    return _move_pdf_with_meta(pdf_path, processed_folder)
+    return _move_pdf_with_meta_local(pdf_path, processed_folder)
 
 
 def move_to_error(pdf_path: str) -> str:
-    """エラーPDFを エラーフォルダへ移動する（.meta.json も一緒に）"""
-    return _move_pdf_with_meta(pdf_path, NEW_ERROR_FOLDER)
+    """エラーフォルダへ移動。ローカル/API 両対応。"""
+    if is_api_mode():
+        return _move_via_drive_api(pdf_path, "error")
+    return _move_pdf_with_meta_local(pdf_path, NEW_ERROR_FOLDER)
+
+
+# 後方互換のため旧名も残す（外部から呼ばれていた場合に備えて）
+_move_pdf_with_meta = _move_pdf_with_meta_local
 
 
 def build_row(ocr, ddc, item, page_num, pdf_name, output_dest, total_cs,

@@ -199,18 +199,39 @@ def api_pending_pdf(order_id):
     if not file_name:
         return "No source file (manual entry?)", 404
 
+    mt = "application/pdf" if file_name.lower().endswith(".pdf") else "text/csv"
+
+    # まずローカルマウント済み Drive フォルダから検索（ローカル運用時はこれで OK）
     DRIVE_BASE = r"G:\共有ドライブ\TWO\SCM\31_受発注確認\受注受信\_自動取込"
     search_folders = ["処理済み", "新着", "過去　処理不要", "エラー"]
     for folder in search_folders:
         path = os.path.join(DRIVE_BASE, folder, file_name)
         if os.path.exists(path):
-            mt = "application/pdf" if file_name.lower().endswith(".pdf") else "text/csv"
             return send_file(path, mimetype=mt)
 
     src_path = row.get("source_file_path") or ""
     if src_path and os.path.exists(src_path):
-        mt = "application/pdf" if file_name.lower().endswith(".pdf") else "text/csv"
         return send_file(src_path, mimetype=mt)
+
+    # ローカルに無い場合は Drive API モードを試す（Render 等）
+    try:
+        from drive_api_client import get_drive_client, LocalDriveClient
+        dc = get_drive_client()
+        if not isinstance(dc, LocalDriveClient):
+            # 各フォルダから file_name を検索
+            for folder_key in ("processed", "new", "archive", "error"):
+                try:
+                    files = dc.list_files(folder_key, extensions=(os.path.splitext(file_name)[1],))
+                except Exception:
+                    continue
+                hit = next((f for f in files if f.name == file_name), None)
+                if hit:
+                    data = dc.download(hit)
+                    from io import BytesIO
+                    return send_file(BytesIO(data), mimetype=mt,
+                                     as_attachment=False, download_name=file_name)
+    except Exception as e:
+        print(f"[pending_pdf] Drive API fallback failed: {e}")
 
     return f"PDF/CSV not found: {file_name}", 404
 
