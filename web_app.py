@@ -2415,9 +2415,10 @@ function renderDetail(data) {
 
   // 確定時 snapshot に最新の編集後 items が保存されているのでそちらを優先する
   // （fax_order_items_scm は OCR 取込時の値のまま、確定時の編集は反映されないため）
-  const history = h.confirmation_history || [];
-  if (history.length > 0) {
-    const latest = history[history.length - 1] || {};
+  // 注意: `history` はブラウザの window.history と衝突するので別名で受ける
+  const confirmHistory = h.confirmation_history || [];
+  if (confirmHistory.length > 0) {
+    const latest = confirmHistory[confirmHistory.length - 1] || {};
     const snapPages = (latest.snapshot || {}).pages || [];
     const snapItems = [];
     for (const p of snapPages) {
@@ -2505,15 +2506,14 @@ function renderDetail(data) {
   }
   html += '</div>';
 
-  // 確定履歴（confirmation_history）
-  const history = h.confirmation_history || [];
-  if (history.length > 0) {
-    html += `<div class="detail-section"><h3>確定履歴 (${history.length}回)</h3>`;
-    history.slice().reverse().forEach((entry, idx) => {
+  // 確定履歴（confirmation_history）— 冒頭で取得した confirmHistory を再利用
+  if (confirmHistory.length > 0) {
+    html += `<div class="detail-section"><h3>確定履歴 (${confirmHistory.length}回)</h3>`;
+    confirmHistory.slice().reverse().forEach((entry, idx) => {
       const at = (entry.at || '').replace('T', ' ').substring(0, 19);
       const by = entry.by || '-';
       const isLatest = idx === 0;
-      const label = isLatest ? '最新' : `${history.length - idx}回目`;
+      const label = isLatest ? '最新' : `${confirmHistory.length - idx}回目`;
       html += `<div class="history-row">
         <span class="at">[${label}]</span> ${at} by ${by}
       </div>`;
