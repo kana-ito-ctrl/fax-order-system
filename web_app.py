@@ -2411,7 +2411,35 @@ async function showDetail(orderId, rowEl) {
 
 function renderDetail(data) {
   const h = data.header;
-  const items = data.items || [];
+  let items = data.items || [];
+
+  // 確定時 snapshot に最新の編集後 items が保存されているのでそちらを優先する
+  // （fax_order_items_scm は OCR 取込時の値のまま、確定時の編集は反映されないため）
+  const history = h.confirmation_history || [];
+  if (history.length > 0) {
+    const latest = history[history.length - 1] || {};
+    const snapPages = (latest.snapshot || {}).pages || [];
+    const snapItems = [];
+    for (const p of snapPages) {
+      for (const si of (p.items || [])) {
+        snapItems.push({
+          jan_code: si.jan,
+          product_code: si.code,
+          product_name: si.master_name || si.ocr_name,
+          quantity: si.quantity,
+          unit: 'CS',
+          unit_price: si.cs_price != null ? si.cs_price : si.unit_price,
+          amount: si.amount,
+          spec: si.spec,
+          product_master_matched: si.matched,
+          _from_snapshot: true,
+        });
+      }
+    }
+    if (snapItems.length > 0) {
+      items = snapItems;
+    }
+  }
 
   const kv = (k, v) => `<div class="k">${k}</div><div class="v">${v != null && v !== '' ? v : '-'}</div>`;
 
