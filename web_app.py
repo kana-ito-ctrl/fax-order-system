@@ -781,7 +781,8 @@ def api_upload_multi_csv():
         except Exception:
             first_line = ""
 
-        if first_line.startswith('"H"') or first_line.startswith('H,'):
+        if (first_line.startswith('"H"') or first_line.startswith('H,')
+                or 'データ区分' in first_line):
             source = "infomart"
             results = parse_infomart_csv(csv_bytes, f.filename)
         elif '送信者ID' in first_line and 'メッセージ識別ID' in first_line:
@@ -851,7 +852,10 @@ def api_upload():
         except Exception:
             first_line = ""
 
-        if first_line.startswith('"H"') or first_line.startswith('H,'):
+        # インフォマートは "H" 行あり/なし両方の形式を持つので、1行目に「データ区分」が
+        # 含まれるかでも判定する（H行なしフォーマットの取引先用）
+        if (first_line.startswith('"H"') or first_line.startswith('H,')
+                or 'データ区分' in first_line):
             source = "infomart"
             results = parse_infomart_csv(csv_bytes, f.filename)
             error_msg = "インフォマートCSVにデータが見つかりません"
