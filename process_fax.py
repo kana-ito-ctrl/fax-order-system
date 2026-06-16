@@ -97,12 +97,22 @@ def parse_infomart_csv(csv_bytes, filename="infomart.csv"):
     reader = csv.reader(io.StringIO(text))
     all_rows = list(reader)
 
-    # ヘッダー行（Row 1）とデータ行（D行）を抽出
-    if len(all_rows) < 3:
+    # ヘッダー行の位置を自動判定（取引先により H行 ありなしのフォーマット差異あり）
+    # Pattern A (H行あり): Row0=H行(日付) / Row1=カラム名 / Row2+=D行
+    # Pattern B (H行なし): Row0=カラム名 / Row1+=D行
+    if not all_rows:
         return []
-    headers = [h.strip('［］') for h in all_rows[1]]
+    header_row_idx = None
+    for i, r in enumerate(all_rows[:3]):
+        if r and r[0].strip().strip('［］').strip('[]') == 'データ区分':
+            header_row_idx = i
+            break
+    if header_row_idx is None:
+        return []
+
+    headers = [h.strip('［］').strip('[]') for h in all_rows[header_row_idx]]
     data_rows = []
-    for r in all_rows[2:]:
+    for r in all_rows[header_row_idx + 1:]:
         if r and r[0].strip() == 'D':
             row_dict = {}
             for j, h in enumerate(headers):
