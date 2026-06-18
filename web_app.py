@@ -3671,8 +3671,8 @@ function renderPage(idx) {
     <div class="card">
         <h3>注文情報 <span class="badge ${badgeClass}" id="ddcBadge-${idx}">${status}</span></h3>
         <div class="field-grid">
-            <label>オーダーNO</label>
-            <input type="text" value="${ocr.order_no || pr.two_order_no || ''}" data-page="${idx}" data-field="order_no" onchange="editField(this)">
+            <label style="color:#c62828;font-weight:bold">⚠️ オーダーNO<br><span style="font-size:11px;font-weight:normal;color:#666">（OCR誤読頻発・要確認）</span></label>
+            <input type="text" value="${ocr.order_no || pr.two_order_no || ''}" data-page="${idx}" data-field="order_no" onchange="editField(this)" style="background:#FFEBEE;font-weight:bold;border:2px solid #d32f2f;font-size:15px">
             <label>TWO受注NO</label>
             <input type="text" value="${pr.two_order_no || ''}" data-page="${idx}" data-field="two_order_no" onchange="editTwoOrderNo(this)" style="background:#FFF8E1;font-weight:bold">
             <label>納品日</label>
