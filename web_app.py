@@ -308,59 +308,84 @@ def api_bulk_csv_export():
         header = data_row["header"]
         items = data_row["items"]
 
-        # 確定時スナップショット (confirmation_history) から expiry_date / shipping_route /
-        # double_pack を JAN 単位で取り出す。fax_order_items_scm には保存されていないため。
-        snap_by_jan = {}
+        # 確定時 snapshot に最新の編集後 items が保存されているのでそれを優先する。
+        # 理由: confirm_fax_order は fax_order_items_scm を更新しない設計のため、
+        # OCR取込時の値（誤マッチ含む）がDB側に残り、編集モードで修正した内容は
+        # snapshot にしか反映されていない。
+        # JAN ベースで紐付けると OCR時の誤JAN と修正後JAN が不一致でマッピング失敗するので、
+        # snapshot がある場合は items を全面的に snapshot から構築する。
+        snap_items_all = []
         history = header.get("confirmation_history") or []
         if history:
             latest_snapshot = history[-1].get("snapshot") or {}
             for snap_page in (latest_snapshot.get("pages") or []):
                 for snap_it in (snap_page.get("items") or []):
-                    snap_jan = str(snap_it.get("jan") or "").strip()
-                    if snap_jan:
-                        snap_by_jan[snap_jan] = snap_it
+                    snap_items_all.append(snap_it)
 
         matched_items = []
-        for it in items:
-            jan = str(it.get("jan_code") or "").strip()
-            prow = pm_jan_index.get(jan)
-            output_dest = str(prow.get("出力先") or "").strip() if prow is not None else ""
-            case_qty = int(prow.get("入数") or 0) if prow is not None else 0
-            cs_price = float(prow.get("CS単価") or 0) if prow is not None else float(it.get("unit_price") or 0)
-            try:
-                qty = int(float(it.get("quantity") or 0))
-            except (TypeError, ValueError):
-                qty = 0
-            snap_it = snap_by_jan.get(jan, {})
-            # 編集モードで数量変更したケースに対応:
-            # confirm_fax_order は fax_order_items_scm を更新しないため、
-            # 最新の確定値は confirmation_history.snapshot 側にしかない
-            snap_qty = snap_it.get("quantity")
-            if snap_qty is not None and snap_qty != "":
+        if snap_items_all:
+            # snapshot 優先パス (確定済み受注で確実にこちらに入る)
+            for snap_it in snap_items_all:
+                jan = str(snap_it.get("jan") or "").strip()
+                prow = pm_jan_index.get(jan) if jan else None
+                # 出力先・CS単価等は商品マスタから補完。snapshot に値があればそちらを尊重
+                output_dest = (snap_it.get("output_dest") or
+                               (str(prow.get("出力先") or "").strip() if prow is not None else ""))
+                case_qty = int(prow.get("入数") or 0) if prow is not None else 0
+                cs_price_master = float(prow.get("CS単価") or 0) if prow is not None else 0
+                cs_price = float(snap_it.get("cs_price") or cs_price_master or 0)
                 try:
-                    qty = int(float(snap_qty))
+                    qty = int(float(snap_it.get("quantity") or 0))
                 except (TypeError, ValueError):
-                    pass
-            matched_items.append({
-                "jan": jan,
-                "code": it.get("product_code") or "",
-                "master_name": it.get("product_name") or "",
-                "ocr_name": it.get("ocr_raw_name") or it.get("product_name") or "",
-                "spec": it.get("spec") or (str(prow.get("規格") or "") if prow is not None else ""),
-                "pack": str(prow.get("配送荷姿") or "") if prow is not None else "",
-                "quantity": qty,
-                "unit": it.get("unit") or "CS",
-                "unit_price": float(prow.get("1袋単価") or 0) if prow is not None else float(it.get("unit_price") or 0),
-                "cs_price": cs_price,
-                "amount": float(it.get("amount") or 0),
-                "case_quantity": case_qty,
-                "output_dest": output_dest,
-                "matched": bool(it.get("product_master_matched")),
-                # confirmation_history snapshot から補完（fax_order_items_scm に未保存）
-                "expiry_date": snap_it.get("expiry_date") or "",
-                "shipping_route": snap_it.get("shipping_route") or "",
-                "double_pack": bool(snap_it.get("double_pack")),
-            })
+                    qty = 0
+                matched_items.append({
+                    "jan": jan,
+                    "code": snap_it.get("code") or "",
+                    "master_name": snap_it.get("master_name") or "",
+                    "ocr_name": snap_it.get("ocr_name") or snap_it.get("master_name") or "",
+                    "spec": snap_it.get("spec") or (str(prow.get("規格") or "") if prow is not None else ""),
+                    "pack": snap_it.get("pack") or (str(prow.get("配送荷姿") or "") if prow is not None else ""),
+                    "quantity": qty,
+                    "unit": "CS",
+                    "unit_price": float(snap_it.get("unit_price") or
+                                        (prow.get("1袋単価") if prow is not None else 0) or 0),
+                    "cs_price": cs_price,
+                    "amount": float(snap_it.get("amount") or 0),
+                    "case_quantity": case_qty,
+                    "output_dest": output_dest,
+                    "matched": bool(snap_it.get("matched")),
+                    "expiry_date": snap_it.get("expiry_date") or "",
+                    "shipping_route": snap_it.get("shipping_route") or "",
+                    "double_pack": bool(snap_it.get("double_pack")),
+                })
+        else:
+            # フォールバック: snapshot 無し（draft のまま等）— fax_order_items_scm を使う
+            for it in items:
+                jan = str(it.get("jan_code") or "").strip()
+                prow = pm_jan_index.get(jan)
+                output_dest = str(prow.get("出力先") or "").strip() if prow is not None else ""
+                case_qty = int(prow.get("入数") or 0) if prow is not None else 0
+                cs_price = float(prow.get("CS単価") or 0) if prow is not None else float(it.get("unit_price") or 0)
+                try:
+                    qty = int(float(it.get("quantity") or 0))
+                except (TypeError, ValueError):
+                    qty = 0
+                matched_items.append({
+                    "jan": jan,
+                    "code": it.get("product_code") or "",
+                    "master_name": it.get("product_name") or "",
+                    "ocr_name": it.get("ocr_raw_name") or it.get("product_name") or "",
+                    "spec": it.get("spec") or (str(prow.get("規格") or "") if prow is not None else ""),
+                    "pack": str(prow.get("配送荷姿") or "") if prow is not None else "",
+                    "quantity": qty,
+                    "unit": it.get("unit") or "CS",
+                    "unit_price": float(prow.get("1袋単価") or 0) if prow is not None else float(it.get("unit_price") or 0),
+                    "cs_price": cs_price,
+                    "amount": float(it.get("amount") or 0),
+                    "case_quantity": case_qty,
+                    "output_dest": output_dest,
+                    "matched": bool(it.get("product_master_matched")),
+                })
 
         # DDC情報（住所・電話等）
         from ocr_module import _ddc_row_to_dict
