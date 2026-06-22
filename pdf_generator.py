@@ -603,6 +603,7 @@ def gen_partner_pdf(
     bg_color=None,
     hide_price=False,
     quantity_label="数量(CS)",
+    quantity_prefix="",
     default_remarks=None,
 ):
     """汎用 発注書PDF生成（シルビア/ハルナと同じレイアウトを色違いで）"""
@@ -763,8 +764,10 @@ def gen_partner_pdf(
 
         if hide_price:
             c.setFont(FONT, 12)
-            c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1]) * mm - pad, ty,
-                              safe_str(item.get('quantity', '')))
+            qty_text = safe_str(item.get('quantity', ''))
+            if qty_text and quantity_prefix:
+                qty_text = "%s%s" % (quantity_prefix, qty_text)
+            c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1]) * mm - pad, ty, qty_text)
         else:
             c.setFont(FONT, 11)
             c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1]) * mm - pad, ty,
@@ -834,7 +837,8 @@ def gen_nomura_pdf(order, items, staff_name="伊藤"):
         bar_label="野村不動産ライフ＆スポーツ様 発注書（出荷指示書）",
         dest_company="野村不動産ライフ＆スポーツ㈱ 受注ご担当者様",
         hide_price=True,
-        quantity_label="数量(個)",
+        quantity_label="数量",
+        quantity_prefix="バラ",
         default_remarks=_PARTNER_DEFAULT_REMARKS,
     )
 
@@ -847,7 +851,8 @@ def gen_emsink_pdf(order, items, staff_name="伊藤"):
         bar_label="エムズインク様 発注書（出荷指示書）",
         dest_company="㈱エムズインク 受注ご担当者様",
         hide_price=True,
-        quantity_label="数量(個)",
+        quantity_label="数量",
+        quantity_prefix="バラ",
         default_remarks=_PARTNER_DEFAULT_REMARKS,
     )
 
@@ -860,6 +865,7 @@ def gen_powbar_pdf(order, items, staff_name="伊藤"):
         bar_label="The POW BAR様 発注書（出荷指示書）",
         dest_company="㈱The POW BAR 受注ご担当者様",
         hide_price=True,
-        quantity_label="数量(個)",
+        quantity_label="数量",
+        quantity_prefix="バラ",
         default_remarks=_PARTNER_DEFAULT_REMARKS,
     )
