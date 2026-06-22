@@ -3948,6 +3948,10 @@ function updateProduct(el) {
         // 商品変更により output_dest が変わったので、経路の手動上書きをクリア
         // （次の recalculateShipping → applyShippingRouteAuto で再計算される）
         delete item.route_user_override;
+        // パートナー直送先は商品選択した瞬間に direct を設定（送料計算の応答を待たず即時反映）
+        if (['野村不動産', 'エムズインク', 'POW BAR'].includes(item.output_dest)) {
+            item.shipping_route = 'direct';
+        }
     }
     applyAutoRemarks(idx);
     renderPage(idx);
