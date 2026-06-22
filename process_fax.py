@@ -579,7 +579,14 @@ _TWO_NAME = "株式会社ＴＷＯ"
 _TWO_TEL = "03-6839-0010"
 
 def _get_irisuu(item):
-    """商品マッチ結果から入数を取得する。case_quantity があればそれを使い、なければ1。"""
+    """商品マッチ結果から入数を取得する。case_quantity があればそれを使い、なければ1。
+
+    パートナー直送先 (野村不動産/エムズインク/POW BAR) はバラ単位で受注するため、
+    quantity 入力値をそのまま使う（CS→バラ換算しない）。
+    """
+    # パートナー商品はバラ単位扱い → irisuu=1 でバラ換算をバイパス
+    if item.get("output_dest") in ("野村不動産", "エムズインク", "POW BAR"):
+        return 1
     cq = item.get("case_quantity", 0)
     try:
         cq = int(cq or 0)
