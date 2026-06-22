@@ -3485,6 +3485,9 @@ function applyShippingRouteAuto() {
                 } else {
                     route = isLotBreak ? 'warehouse' : 'direct';
                 }
+            } else if (outputDest === '野村不動産' || outputDest === 'エムズインク' || outputDest === 'POW BAR') {
+                // 2026-06 追加: 常に直送（ロット条件なし）
+                route = 'direct';
             } else {
                 route = 'warehouse';  // 不明な output_dest は warehouse 扱い
             }

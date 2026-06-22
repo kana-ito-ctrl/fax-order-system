@@ -23,7 +23,14 @@ from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ocr_module import process_fax_pdf, load_staff
-from pdf_generator import gen_sylvia_pdf, gen_haruna_pdf
+from pdf_generator import gen_sylvia_pdf, gen_haruna_pdf, gen_nomura_pdf, gen_emsink_pdf, gen_powbar_pdf
+
+# パートナー別 PDF生成器マップ (output_dest -> (関数, ファイル名プレフィックス))
+PARTNER_PDF_GENERATORS = {
+    "野村不動産": (gen_nomura_pdf, "野村不動産"),
+    "エムズインク": (gen_emsink_pdf, "エムズインク"),
+    "POW BAR": (gen_powbar_pdf, "POWBAR"),
+}
 
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
@@ -675,7 +682,8 @@ def results_to_ne_csv(results, pdf_name):
             if not shipping_route:
                 # フォールバック: shipping_route 未セット時
                 shipping_route = "warehouse" if output_dest == "自社倉庫" else "direct"
-            if shipping_route == "direct" and output_dest in ("ハルナ", "シルビア"):
+            if shipping_route == "direct" and output_dest in (
+                    "ハルナ", "シルビア", "野村不動産", "エムズインク", "POW BAR"):
                 notes = output_dest
             else:
                 notes = ""
@@ -1012,6 +1020,9 @@ def results_to_coola_csv(results, pdf_name):
             od = it.get("output_dest") or ""
             if od in ("シルビア", "ハルナ"):
                 return _cs_by_dest[od] >= 10
+            # 野村不動産 / エムズインク / POW BAR は常に直送 → COOLA除外
+            if od in ("野村不動産", "エムズインク", "POW BAR"):
+                return True
             return False
         matched_items = [it for it in all_matched if not _is_direct_shipping(it)]
         if not matched_items:
@@ -1393,6 +1404,48 @@ def generate_pdfs(results, pdf_name, staff_name="伊藤"):
             with open(out_path, "wb") as f:
                 f.write(pdf_buf.read())
             generated.append(("ハルナ", out_path))
+
+        # Partner PDFs (野村不動産 / エムズインク / POW BAR) — 2026-06 追加
+        # ロット条件なしで output_dest がパートナー名なら必ず発注書PDF生成
+        matched_items = page_result.get("matched_items", [])
+        for partner_name, (pdf_func, file_prefix) in PARTNER_PDF_GENERATORS.items():
+            partner_items = [
+                i for i in matched_items
+                if i.get("matched") and i.get("output_dest") == partner_name
+            ]
+            if not partner_items:
+                continue
+            items_data = []
+            for i in partner_items:
+                items_data.append({
+                    "jan": i.get("jan", ""),
+                    "name": i.get("master_name", ""),
+                    "spec": i.get("spec", ""),
+                    "pack": i.get("pack", ""),
+                    "quantity": i.get("quantity", 0),
+                    # 価格情報も渡すが hide_price=True で非表示になる
+                    "unit_price": int(i.get("unit_price", 0) or 0),
+                    "cs_price": int(i.get("cs_price", 0) or 0),
+                    "amount": int(i.get("amount", 0) or 0),
+                })
+            partner_order_data = {
+                "order_no": order_no,
+                "order_date": str(date.today()),
+                "delivery_date": ocr.get("delivery_date", ""),
+                "delivery_dest": dest_name,
+                "postal": ddc.get("postal", ""),
+                "address": ddc.get("address", ""),
+                "tel": ddc.get("tel", ""),
+                "fax": ddc.get("fax", ""),
+                "remarks": remarks,
+            }
+            pdf_buf = pdf_func(partner_order_data, items_data, staff_name)
+            out_name = f"{file_prefix}_{base_name}_p{page_num}.pdf"
+            out_path = os.path.join(OUTPUT_DIR, out_name)
+            _archive_existing_file(out_path)
+            with open(out_path, "wb") as f:
+                f.write(pdf_buf.read())
+            generated.append((partner_name, out_path))
 
     return generated
 

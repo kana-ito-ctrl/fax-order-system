@@ -21,6 +21,10 @@ except ImportError:
 
 DIRECT_SHIPPING_THRESHOLD = 10  # 直送条件: 10CS以上（フォールバック用）
 
+# 2026-06 追加: ロット条件なしで常に直送する発注先
+# 受注があれば即「直送」扱い、発注書PDF生成対象
+PARTNER_DIRECT_DESTS = ("野村不動産", "エムズインク", "POW BAR")
+
 # Supabaseルールのキャッシュ（セッション中1回のみ取得）
 _shipping_rules_cache = None
 
@@ -78,6 +82,9 @@ def judge_shipping(output_dest: str, total_cs: int, jan: str = None, ddc_code: s
             return "自社倉庫"
 
     # フォールバック: ハードコードルール
+    if output_dest in PARTNER_DIRECT_DESTS:
+        # ロット条件なし、常に直送
+        return "直送"
     if output_dest in ("ハルナ", "シルビア"):
         return "直送" if total_cs >= DIRECT_SHIPPING_THRESHOLD else "自社倉庫"
     return "自社倉庫"
@@ -113,6 +120,8 @@ def judge_warehouse(output_dest: str, total_cs: int, jan: str = None, ddc_code: 
             return rule.get("warehouse", "自社倉庫")
 
     # フォールバック
+    if output_dest in PARTNER_DIRECT_DESTS:
+        return output_dest  # 直送、倉庫名 = パートナー名
     if output_dest in ("ハルナ", "シルビア"):
         if total_cs >= DIRECT_SHIPPING_THRESHOLD:
             return output_dest

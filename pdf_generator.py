@@ -47,6 +47,13 @@ SYL_PRIMARY = colors.HexColor("#8B4513")
 SYL_LIGHT = colors.HexColor("#F5E6D3")
 HAR_PRIMARY = colors.HexColor("#1B5E8C")
 HAR_LIGHT = colors.HexColor("#D6EAF8")
+# 2026-06 追加: 新規発注先用カラー
+NOM_PRIMARY = colors.HexColor("#2E7D32")  # 野村不動産（緑）
+NOM_LIGHT = colors.HexColor("#E8F5E9")
+EMS_PRIMARY = colors.HexColor("#E65100")  # エムズインク（オレンジ）
+EMS_LIGHT = colors.HexColor("#FFF3E0")
+POW_PRIMARY = colors.HexColor("#6A1B9A")  # POW BAR（紫）
+POW_LIGHT = colors.HexColor("#F3E5F5")
 
 # Data directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -579,3 +586,276 @@ def gen_haruna_pdf(order, ddc, staff_name="伊藤"):
     c.save()
     buf.seek(0)
     return buf
+
+
+# ─── 汎用 発注書PDF (2026-06 追加) ─────────────────────────────
+# 野村不動産 / エムズインク / POW BAR 等のパートナー向け発注書を、
+# 色と発注先名を引数化することで1つの関数で生成する。
+# 単価非表示 (hide_price=True) で商品マスタに単価を持たない受注にも対応。
+
+def gen_partner_pdf(
+    order, items, staff_name="伊藤",
+    *,
+    primary_color,
+    light_color,
+    bar_label,
+    dest_company,
+    bg_color=None,
+    hide_price=False,
+    default_remarks=None,
+):
+    """汎用 発注書PDF生成（シルビア/ハルナと同じレイアウトを色違いで）"""
+    buf = BytesIO()
+    staff_data = load_staff()
+    company = staff_data["company"]
+    staff = next((s for s in staff_data["staff"] if s["name"] == staff_name), staff_data["staff"][0])
+
+    c = canvas.Canvas(buf, pagesize=landscape(A4))
+    w, h = landscape(A4)
+    ml = 12 * mm
+    mr = 12 * mm
+    uw = w - ml - mr
+    pad = 4
+
+    # Color bar
+    bar_h = 5 * mm
+    c.setFillColor(primary_color)
+    c.rect(0, h - bar_h, w, bar_h, fill=True, stroke=False)
+    c.setFillColor(colors.white)
+    c.setFont(FONT, 8)
+    c.drawString(ml, h - bar_h + 1.5 * mm, bar_label)
+    c.setFillColor(colors.black)
+
+    # Header
+    y = h - bar_h - 10 * mm
+    c.setFont(FONT, 13)
+    c.drawString(ml, y, dest_company)
+    rx = w - mr - 75 * mm
+    c.setFont(FONT, 11)
+    date_str = safe_str(order.get('order_date', ''))
+    c.drawString(rx, y, "日付　%s" % date_str)
+    confirmed_str = safe_str(order.get('confirmed_at', ''))
+    if confirmed_str:
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        base_w = stringWidth("日付　%s    " % date_str, FONT, 11)
+        c.setFont(FONT, 8.5)
+        c.setFillColor(colors.HexColor("#C62828"))
+        c.drawString(rx + base_w, y, "確定: %s" % confirmed_str)
+        c.setFillColor(colors.black)
+        c.setFont(FONT, 11)
+    y -= 16
+    c.setFont(FONT, 11)
+    c.drawString(ml, y, "ご担当者様")
+
+    addr_text = "〒%s %s" % (safe_str(company.get('postal', '')), safe_str(company.get('address', '')))
+    extra_drop = draw_header_text(c, addr_text, rx, y, 75 * mm, 10)
+    y -= (14 + extra_drop)
+
+    c.setFont(FONT, 10)
+    c.drawString(rx, y, "%s　担当：%s" % (safe_str(company.get('name', '')), safe_str(staff.get('name', ''))))
+    y -= 20
+
+    # Title
+    c.setFont(FONT, 18)
+    c.setFillColor(primary_color)
+    c.drawString(ml, y, "発　注　書（出荷指示書）")
+    c.setFillColor(colors.black)
+    y -= 22
+
+    subtotal = sum(i.get('amount', 0) or 0 for i in items)
+    tax = int(subtotal * 0.08)
+    total = subtotal + tax
+
+    c.setFont(FONT, 12)
+    c.drawString(ml, y, "オーダーNO：")
+    c.setFont(FONT, 13)
+    c.drawString(ml + 35 * mm, y, safe_str(order.get('order_no', '')))
+    c.setFont(FONT, 12)
+    c.drawString(ml + 80 * mm, y, "納品日：")
+    c.setFont(FONT, 13)
+    c.drawString(ml + 100 * mm, y, safe_str(order.get('delivery_date', '')))
+    if not hide_price:
+        c.setFont(FONT, 13)
+        c.drawString(w - mr - 75 * mm, y, "発注額：\xa5%s（税込）" % "{:,}".format(total))
+    y -= 24
+
+    # Destination
+    dest_row_h = 22
+    label_w = 28 * mm
+    val_w = uw - label_w
+
+    def _dest_row(label, value, row_top, fs=12):
+        c.setFillColor(light_color)
+        c.rect(ml, row_top - dest_row_h, label_w, dest_row_h, fill=True, stroke=False)
+        c.setFillColor(primary_color)
+        c.setFont(FONT, 10)
+        c.drawString(ml + pad, cell_mid_y(row_top, dest_row_h, 10), label)
+        c.setFillColor(colors.black)
+        c.setStrokeColor(colors.HexColor("#999999"))
+        c.setLineWidth(0.5)
+        c.rect(ml, row_top - dest_row_h, uw, dest_row_h, fill=False, stroke=True)
+        c.line(ml + label_w, row_top - dest_row_h, ml + label_w, row_top)
+        c.setStrokeColor(colors.black)
+        c.setLineWidth(1)
+        draw_clipped(c, value, ml + label_w + pad, cell_mid_y(row_top, dest_row_h, fs), val_w - pad * 2, fs)
+
+    _dest_row("納品先", order.get('delivery_dest', ''), y, 13)
+    y -= dest_row_h
+    postal = safe_str(order.get('postal', ''))
+    address = safe_str(order.get('address', '')).replace('\n', ' ')
+    addr_val = ("〒%s %s" % (postal, address)) if postal else address
+    _dest_row("住所", addr_val, y, 12)
+    y -= dest_row_h
+    tel = safe_str(order.get('tel', ''))
+    fax = safe_str(order.get('fax', ''))
+    tel_val = "TEL: %s" % tel if tel else ""
+    if fax:
+        tel_val += "　　FAX: %s" % fax
+    _dest_row("電話番号", tel_val, y, 11)
+    y -= dest_row_h + 8
+
+    # Product table
+    uw_mm = uw / mm
+    if hide_price:
+        prod_cols = [
+            (0, 36), (36, 100), (136, 30), (166, 24),
+            (190, uw_mm - 190),
+        ]
+        prod_labels = ["JANコード", "商品名", "規格", "配送荷姿", "数量(CS)"]
+    else:
+        prod_cols = [
+            (0, 30), (30, 72), (102, 20), (122, 18),
+            (140, 18), (158, 22), (180, 22), (202, uw_mm - 202),
+        ]
+        prod_labels = ["JANコード", "商品名", "規格", "配送荷姿", "1袋単価", "CS単価", "数量(CS)", "金額"]
+    prod_hdr_h = 22
+    prod_row_h = 28
+
+    c.setFillColor(primary_color)
+    c.rect(ml, y - prod_hdr_h, uw, prod_hdr_h, fill=True, stroke=False)
+    c.setFillColor(colors.white)
+    c.setFont(FONT, 10)
+    hdr_ty = cell_mid_y(y, prod_hdr_h, 10)
+    right_aligned_from = 4
+    for idx, ((xo, wc), label) in enumerate(zip(prod_cols, prod_labels)):
+        if idx >= right_aligned_from:
+            c.drawRightString(ml + (xo + wc) * mm - pad, hdr_ty, label)
+        else:
+            c.drawString(ml + xo * mm + pad, hdr_ty, label)
+    c.setFillColor(colors.black)
+    y -= prod_hdr_h
+
+    row_bg = bg_color or colors.HexColor("#FFFCF5")
+    for i, item in enumerate(items):
+        bg = row_bg if i % 2 == 0 else None
+        draw_table_row(c, ml, y, prod_cols, uw, prod_row_h, fill_color=bg)
+        ty = cell_mid_y(y, prod_row_h, 11)
+
+        draw_clipped(c, item.get('jan', ''), ml + prod_cols[0][0] * mm + pad, ty,
+                     prod_cols[0][1] * mm - pad * 2, 10)
+        draw_clipped(c, item.get('name', ''), ml + prod_cols[1][0] * mm + pad, ty,
+                     prod_cols[1][1] * mm - pad * 2, 11)
+        draw_clipped(c, item.get('spec', ''), ml + prod_cols[2][0] * mm + pad, ty,
+                     prod_cols[2][1] * mm - pad * 2, 9)
+        draw_clipped(c, item.get('pack', ''), ml + prod_cols[3][0] * mm + pad, ty,
+                     prod_cols[3][1] * mm - pad * 2, 9)
+
+        if hide_price:
+            c.setFont(FONT, 12)
+            c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1]) * mm - pad, ty,
+                              safe_str(item.get('quantity', '')))
+        else:
+            c.setFont(FONT, 11)
+            c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1]) * mm - pad, ty,
+                              safe_str(item.get('unit_price', '')))
+            cs_price = item.get('cs_price', '')
+            if cs_price != '' and cs_price is not None:
+                try:
+                    c.drawRightString(ml + (prod_cols[5][0] + prod_cols[5][1]) * mm - pad, ty,
+                                      "{:,}".format(int(cs_price)))
+                except (ValueError, TypeError):
+                    c.drawRightString(ml + (prod_cols[5][0] + prod_cols[5][1]) * mm - pad, ty, safe_str(cs_price))
+            c.setFont(FONT, 12)
+            c.drawRightString(ml + (prod_cols[6][0] + prod_cols[6][1]) * mm - pad, ty,
+                              safe_str(item.get('quantity', '')))
+            amt = item.get('amount', '')
+            if amt and amt is not None:
+                try:
+                    c.setFont(FONT, 11)
+                    c.drawRightString(ml + (prod_cols[7][0] + prod_cols[7][1]) * mm - pad, ty,
+                                      "{:,}".format(int(amt)))
+                except (ValueError, TypeError):
+                    pass
+        y -= prod_row_h
+
+    for _ in range(max(0, 4 - len(items))):
+        draw_table_row(c, ml, y, prod_cols, uw, prod_row_h)
+        y -= prod_row_h
+
+    if not hide_price:
+        y -= 10
+        tx = ml + 155 * mm
+        c.setFont(FONT, 12)
+        c.drawString(tx, y, "小計")
+        c.drawRightString(w - mr - 5 * mm, y, "\xa5%s" % "{:,}".format(subtotal))
+        y -= 18
+        c.drawString(tx, y, "消費税(8%)")
+        c.drawRightString(w - mr - 5 * mm, y, "\xa5%s" % "{:,}".format(tax))
+        y -= 18
+        c.setFont(FONT, 14)
+        c.setFillColor(primary_color)
+        c.drawString(tx, y, "合計")
+        c.drawRightString(w - mr - 5 * mm, y, "\xa5%s" % "{:,}".format(total))
+        c.setFillColor(colors.black)
+
+    remarks = safe_str(order.get('remarks', '')) or safe_str(default_remarks or '')
+    if remarks:
+        y -= 30
+        c.setFillColor(primary_color)
+        c.setFont(FONT, 14)
+        c.drawString(ml, y, "※ %s" % remarks)
+        c.setFillColor(colors.black)
+
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf
+
+
+_PARTNER_DEFAULT_REMARKS = "別紙添付の貼り紙を外装箱に貼り付けて出荷をお願いします。"
+
+
+def gen_nomura_pdf(order, items, staff_name="伊藤"):
+    """野村不動産ライフ＆スポーツ㈱ 向け 発注書PDF生成"""
+    return gen_partner_pdf(
+        order, items, staff_name,
+        primary_color=NOM_PRIMARY, light_color=NOM_LIGHT,
+        bar_label="野村不動産ライフ＆スポーツ様 発注書（出荷指示書）",
+        dest_company="野村不動産ライフ＆スポーツ㈱ 受注ご担当者様",
+        hide_price=True,
+        default_remarks=_PARTNER_DEFAULT_REMARKS,
+    )
+
+
+def gen_emsink_pdf(order, items, staff_name="伊藤"):
+    """㈱エムズインク 向け 発注書PDF生成"""
+    return gen_partner_pdf(
+        order, items, staff_name,
+        primary_color=EMS_PRIMARY, light_color=EMS_LIGHT,
+        bar_label="エムズインク様 発注書（出荷指示書）",
+        dest_company="㈱エムズインク 受注ご担当者様",
+        hide_price=True,
+        default_remarks=_PARTNER_DEFAULT_REMARKS,
+    )
+
+
+def gen_powbar_pdf(order, items, staff_name="伊藤"):
+    """㈱The POW BAR 向け 発注書PDF生成"""
+    return gen_partner_pdf(
+        order, items, staff_name,
+        primary_color=POW_PRIMARY, light_color=POW_LIGHT,
+        bar_label="The POW BAR様 発注書（出荷指示書）",
+        dest_company="㈱The POW BAR 受注ご担当者様",
+        hide_price=True,
+        default_remarks=_PARTNER_DEFAULT_REMARKS,
+    )
