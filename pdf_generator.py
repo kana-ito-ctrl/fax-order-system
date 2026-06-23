@@ -605,6 +605,7 @@ def gen_partner_pdf(
     quantity_label="数量(CS)",
     quantity_prefix="",
     quantity_suffix="",
+    quantity_formatter=None,
     default_remarks=None,
 ):
     """汎用 発注書PDF生成（シルビア/ハルナと同じレイアウトを色違いで）"""
@@ -765,9 +766,12 @@ def gen_partner_pdf(
 
         if hide_price:
             c.setFont(FONT, 12)
-            qty_text = safe_str(item.get('quantity', ''))
-            if qty_text:
-                qty_text = "%s%s%s" % (quantity_prefix or '', qty_text, quantity_suffix or '')
+            if quantity_formatter:
+                qty_text = quantity_formatter(item.get('quantity'))
+            else:
+                qty_text = safe_str(item.get('quantity', ''))
+                if qty_text:
+                    qty_text = "%s%s%s" % (quantity_prefix or '', qty_text, quantity_suffix or '')
             c.drawRightString(ml + (prod_cols[4][0] + prod_cols[4][1]) * mm - pad, ty, qty_text)
         else:
             c.setFont(FONT, 11)
@@ -858,8 +862,20 @@ def gen_emsink_pdf(order, items, staff_name="伊藤"):
     )
 
 
+def _powbar_qty_format(q):
+    """POW BAR 数量フォーマット: ボール数入力を「バラ{袋数}袋（{ボール数}ボール）」に変換。
+    1ボール = 12袋。"""
+    try:
+        n = int(float(q or 0))
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    return "バラ%d袋（%dボール）" % (n * 12, n)
+
+
 def gen_powbar_pdf(order, items, staff_name="伊藤"):
-    """㈱The POW BAR 向け 発注書PDF生成 (バラボール単位)"""
+    """㈱The POW BAR 向け 発注書PDF生成 (ボール数入力 → バラXX袋（Nボール）併記)"""
     return gen_partner_pdf(
         order, items, staff_name,
         primary_color=POW_PRIMARY, light_color=POW_LIGHT,
@@ -867,6 +883,6 @@ def gen_powbar_pdf(order, items, staff_name="伊藤"):
         dest_company="㈱The POW BAR 受注ご担当者様",
         hide_price=True,
         quantity_label="数量",
-        quantity_prefix="バラ", quantity_suffix="ボール",
+        quantity_formatter=_powbar_qty_format,
         default_remarks=_PARTNER_DEFAULT_REMARKS,
     )
