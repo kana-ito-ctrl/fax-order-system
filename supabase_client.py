@@ -494,6 +494,18 @@ def load_torihikisaki_master_from_supabase() -> pd.DataFrame | None:
     for key, val in haruna.items():
         haruna_normalized[_norm_key(key)] = val
 
+    # 電話番号サニタイズ用: Slack の <tel:NUMBER|NUMBER> 形式を素の番号に戻す
+    # マスタ登録時にユーザーが Slack のリッチリンクごとコピペしてしまうケースの保険
+    _TEL_MARKUP_RE = re.compile(r"<tel:([^|>]+)(?:\|[^>]*)?>")
+    def _sanitize_tel(s):
+        if not s:
+            return ""
+        s = str(s).strip()
+        m = _TEL_MARKUP_RE.search(s)
+        if m:
+            return m.group(1).strip()
+        return s
+
     records = []
     for r in rows:
         nohinsaki = (r.get("nohinsaki_name") or "").replace('\xa0', ' ').replace('\u3000', ' ').strip()
@@ -515,7 +527,7 @@ def load_torihikisaki_master_from_supabase() -> pd.DataFrame | None:
             "取引先コード": torihikisaki_code,
             "郵便番号":   (r.get("yubin_bango") or ""),
             "住所":       (r.get("jusho") or ""),
-            "電話番号":   (r.get("denwa_bango") or ""),
+            "電話番号":   _sanitize_tel(r.get("denwa_bango")),
             "FAX番号":    "",
             "入荷時間":   (hc.get("arrival_time") or ""),
             "バース予約": (hc.get("basse_reservation") or ""),

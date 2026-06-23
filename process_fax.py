@@ -10,9 +10,22 @@ Output:
     - Haruna order PDF (if applicable)
 """
 import os
+import re
 import sys
 import csv
 import argparse
+
+# Slack の <tel:NUMBER|NUMBER> リッチリンクが電話番号フィールドに混入したときに
+# 素の番号だけを取り出すためのサニタイザ（マスタロード時の保険と二重防御）
+_TEL_MARKUP_RE = re.compile(r"<tel:([^|>]+)(?:\|[^>]*)?>")
+def _sanitize_tel(s):
+    if not s:
+        return ""
+    s = str(s).strip()
+    m = _TEL_MARKUP_RE.search(s)
+    if m:
+        return m.group(1).strip()
+    return s
 
 # Windows terminal UTF-8 output
 if sys.stdout.encoding and sys.stdout.encoding.lower() in ('cp932', 'shift_jis', 'mbcs'):
@@ -630,7 +643,7 @@ def results_to_ne_csv(results, pdf_name):
         dest_name = ddc.get("name", ocr.get("delivery_dest", ""))
         dest_postal = (ddc.get("postal", "") or "").replace("-", "")
         dest_address = ddc.get("address", "") or ""
-        dest_tel = ddc.get("tel", "") or ""
+        dest_tel = _sanitize_tel(ddc.get("tel", ""))
 
         # 日付指定 = 納品日
         date_spec = ""
@@ -990,7 +1003,7 @@ def results_to_coola_csv(results, pdf_name):
         dest_name = ddc.get("name", ocr.get("delivery_dest", ""))
         dest_postal = (ddc.get("postal", "") or "").replace("-", "")
         dest_address = ddc.get("address", "") or ""
-        dest_tel = ddc.get("tel", "") or ""
+        dest_tel = _sanitize_tel(ddc.get("tel", ""))
 
         # 卸先マスタから情報取得
         oroshi = oroshisaki.get(dest_name) or oroshisaki.get(unicodedata.normalize('NFKC', dest_name)) or {}
