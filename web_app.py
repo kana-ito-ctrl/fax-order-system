@@ -117,21 +117,32 @@ def get_ddc_list():
 # ─── API Endpoints ───
 
 
+def _no_cache_html(html_body):
+    """HTMLレスポンスにブラウザキャッシュ抑止ヘッダーを付ける。
+    /api だけキャッシュ制御しても index HTML 自体がブラウザキャッシュされると
+    古い JS/テンプレートが返り続けるので、こちらにも no-store を明示。"""
+    resp = make_response(html_body)
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
 @app.route("/")
 def index():
-    return render_template_string(HTML_TEMPLATE, app_last_updated=APP_LAST_UPDATED)
+    return _no_cache_html(render_template_string(HTML_TEMPLATE, app_last_updated=APP_LAST_UPDATED))
 
 
 @app.route("/pending")
 def pending_orders_page():
     """保留中受注一覧ページ（read-only / Supabase fax_orders_scm から取得）"""
-    return render_template_string(PENDING_ORDERS_TEMPLATE, app_last_updated=APP_LAST_UPDATED)
+    return _no_cache_html(render_template_string(PENDING_ORDERS_TEMPLATE, app_last_updated=APP_LAST_UPDATED))
 
 
 @app.route("/confirmed")
 def confirmed_orders_page():
     """Phase 4: 確定済み受注一覧ページ（再編集可・Supabase fax_orders_scm から取得）"""
-    return render_template_string(CONFIRMED_ORDERS_TEMPLATE, app_last_updated=APP_LAST_UPDATED)
+    return _no_cache_html(render_template_string(CONFIRMED_ORDERS_TEMPLATE, app_last_updated=APP_LAST_UPDATED))
 
 
 @app.route("/api/confirmed_orders")
