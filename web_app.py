@@ -26,7 +26,7 @@ for _stream_name in ('stdout', 'stderr'):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, request, jsonify, send_file, render_template_string
+from flask import Flask, request, jsonify, send_file, render_template_string, make_response
 from datetime import datetime, date
 
 # アプリ本体ファイルの最終更新日時を取得（起動時に確定）
@@ -66,6 +66,16 @@ def generate_two_order_no():
 _ddc_master_df = None
 _product_master_df = None
 _ddc_list_cache = None
+
+
+def _no_cache_json(payload):
+    """マスタ系JSON APIをブラウザに絶対キャッシュさせないためのラッパー。
+    マスタ更新直後にブラウザキャッシュで古い商品/納品先が返り続ける事故を防ぐ。"""
+    resp = make_response(jsonify(payload))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 def get_ddc_master():
@@ -263,7 +273,7 @@ def api_pending_order_delete(order_id):
 
 @app.route("/api/ddc_list")
 def api_ddc_list():
-    return jsonify(get_ddc_list())
+    return _no_cache_json(get_ddc_list())
 
 
 @app.route("/api/bulk_csv_export", methods=["POST"])
@@ -779,7 +789,7 @@ def api_product_list():
                 "cs_price": cs_price, "spec": spec, "pack": pack,
                 "unit_price": unit_price,
             })
-    return jsonify(items)
+    return _no_cache_json(items)
 
 
 @app.route("/api/upload_multi_csv", methods=["POST"])
@@ -2921,10 +2931,14 @@ let draftMode = null;  // null or { draft_id, draft_status, draft_confirmation_c
 const STAFF_LS_KEY = 'fax_order_system.last_staff';
 
 // ─── Init: load DDC list + 商品マスタ + 担当者一覧 + ドラフト ───
+// マスタ系は cache: 'no-store' + ?_t= でブラウザキャッシュを完全に切る
+// （マスタ登録直後にブラウザが古いリストを再利用する事故を防ぐ）
+const _cacheBuster = () => `?_t=${Date.now()}`;
+const _noStore = { cache: 'no-store' };
 Promise.all([
-    fetch('/api/ddc_list').then(r => r.json()),
-    fetch('/api/product_list').then(r => r.json()),
-    fetch('/api/staff_list').then(r => r.json()),
+    fetch('/api/ddc_list' + _cacheBuster(), _noStore).then(r => r.json()),
+    fetch('/api/product_list' + _cacheBuster(), _noStore).then(r => r.json()),
+    fetch('/api/staff_list' + _cacheBuster(), _noStore).then(r => r.json()),
 ]).then(async ([ddcData, prodData, staffData]) => {
     ddcMaster = ddcData;
     productMaster = prodData;
@@ -3692,6 +3706,20 @@ function renderPage(idx) {
             <td>${matchBadge}</td>
             <td><button onclick="removeProductRow(${idx},${i})" style="background:#d32f2f;color:#fff;border:none;border-radius:3px;padding:2px 8px;cursor:pointer;font-size:12px">✕</button></td>
         </tr>`;
+        // 旧2Energy 受注時の要確認アラート
+        // 対象: RNL 2Energy (1005038A0310 / JAN 4589570801348) や旧品コード群
+        // 新品 2Energy_2607 (1005038A0314 / JAN 4589570801621) と間違いやすいため注意喚起
+        const _legacyEnergyJans = ['4589570801348'];
+        const _legacyEnergyCodes = ['1005038A0310', '1005038A0250'];
+        const isLegacyEnergy = _legacyEnergyJans.includes(it.jan || '') ||
+                               _legacyEnergyCodes.includes(it.code || '');
+        if (isLegacyEnergy) {
+            itemsRows += `<tr style="background:#fff8e1;">
+                <td colspan="8" style="padding:6px 10px;color:#5d4037;font-size:12px;border-left:4px solid #ff9800;">
+                    ⚠️ <strong>旧2Energy 受注</strong> — この商品は旧品です。新品「2Energy_2607」(JAN:4589570801621) との取り違えがないか、発注元に要確認してください。
+                </td>
+            </tr>`;
+        }
     }
 
     panel.innerHTML = `
@@ -4118,10 +4146,11 @@ async function reloadMaster() {
         const data = await res.json();
         if (data.success) {
             document.getElementById('statusText').textContent = data.message;
-            // DDCリスト・商品リストも再取得
+            // DDCリスト・商品リストも再取得（キャッシュ完全バイパス）
+            const _t = Date.now();
             const [ddcRes, prodRes] = await Promise.all([
-                fetch('/api/ddc_list'),
-                fetch('/api/product_list'),
+                fetch(`/api/ddc_list?_t=${_t}`, { cache: 'no-store' }),
+                fetch(`/api/product_list?_t=${_t}`, { cache: 'no-store' }),
             ]);
             ddcMaster = await ddcRes.json();
             productMaster = await prodRes.json();

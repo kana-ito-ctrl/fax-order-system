@@ -348,6 +348,15 @@ def match_product(ocr_item, product_master):
                 if len(alt) > 0:
                     result = _product_row_to_dict(alt.iloc[0], ocr_item)
                     result["jan"] = jan  # JANは元のまま保持
+            # 2Energy 新品（JAN:4589570801621）→ 1005038A0314 (2Energy_2607) を明示優先
+            # 2026-07-01 以降、Energy と表記されている発注書でこの新JAN が載っていれば
+            # 旧品ではなく新品にヒットさせる。JAN一意なので通常はここに落ちるはずだが
+            # 過去に旧品として登録された行が残っている環境でも確実に切り替わるよう明示。
+            if jan == "4589570801621":
+                alt = product_master[product_master["商品コード"] == "1005038A0314"]
+                if len(alt) > 0:
+                    result = _product_row_to_dict(alt.iloc[0], ocr_item)
+                    result["jan"] = jan
             return result
 
     # 2. Product name exact match (normalized)
